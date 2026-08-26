@@ -1,68 +1,44 @@
-/*
- * overlay.css — styles for the AI score badges on DexScreener
- *
- * These badges overlay on top of DexScreener's existing UI.
- * They need to be visible but not intrusive.
- */
-
+/* Badge — floats at the right edge of each token row */
 .cs-badge {
   position: absolute;
-  right: 8px;
+  right: 6px;
   top: 50%;
   transform: translateY(-50%);
-  z-index: 9999;
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  z-index: 99999;
   pointer-events: auto;
 }
 
-.cs-badge-score {
+.cs-score {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  padding: 3px 8px;
+  padding: 2px 8px;
   border-radius: 6px;
-  font-size: 12px;
-  font-weight: 700;
+  font: 700 12px/1 'JetBrains Mono', 'Fira Code', monospace;
   color: #fff;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
   cursor: pointer;
   white-space: nowrap;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-  transition: transform 0.1s;
+  box-shadow: 0 1px 6px rgba(0,0,0,.4);
+  transition: transform .1s;
 }
+.cs-score:hover { transform: scale(1.1); }
 
-.cs-badge-score:hover {
-  transform: scale(1.08);
-}
-
-/* Tooltip — shows on hover */
-.cs-badge-tooltip {
+/* Tooltip on hover */
+.cs-tip {
   display: none;
   position: absolute;
-  right: 0;
-  top: calc(100% + 6px);
-  background: #1a1a2e;
-  color: #e5e5e5;
-  border: 1px solid #333;
+  right: 0; top: calc(100% + 6px);
+  background: #111827;
+  color: #d1d5db;
+  border: 1px solid #374151;
   border-radius: 8px;
   padding: 8px 12px;
-  font-size: 12px;
-  line-height: 1.4;
+  font: 400 12px/1.4 system-ui, sans-serif;
   min-width: 200px;
-  max-width: 300px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
-  z-index: 10000;
+  max-width: 280px;
+  box-shadow: 0 4px 20px rgba(0,0,0,.6);
+  z-index: 100000;
   pointer-events: none;
 }
-
-.cs-badge:hover .cs-badge-tooltip {
-  display: block;
-}
-
-.cs-badge-tooltip strong {
-  color: #fff;
-  font-size: 11px;
-  letter-spacing: 0.5px;
-}
+.cs-badge:hover .cs-tip { display: block; }
+.cs-tip strong { color: #fff; font-size: 11px; letter-spacing: .5px; }

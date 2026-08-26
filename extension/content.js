@@ -1,216 +1,250 @@
 /*
- * content.js — runs on dexscreener.com
+ * content.js — runs on gmgn.ai AND dexscreener.com
  *
- * Scans the page DOM for token pairs, extracts addresses/names,
- * sends them to background.js for evaluation,
- * then overlays AI scores directly on the DexScreener UI.
+ * Detects which site we're on, scrapes token data from the DOM,
+ * sends to background.js for AI evaluation,
+ * overlays meme quality badges on the page.
  */
 
+const SITE = location.hostname.includes("gmgn") ? "gmgn" : "dexscreener";
 let scanTimer = null;
-let isRunning = false;
-const overlaidTokens = new Map(); // address -> DOM element of our badge
+const evaluated = new Map();  // address -> result
+const pendingAddresses = new Set();
 
-
-// ── Start scanning when page loads ──────────────────────────
+// ── Boot ────────────────────────────────────────────────────
 
 init();
 
 async function init() {
   const settings = await getSettings();
-  if (!settings.enabled) return;
-  if (!settings.apiKey) {
-    console.log("[CoinScreener] No API key set — click the extension icon to configure.");
+  if (!settings.enabled || !settings.apiKey) {
+    console.log("[CoinScreener] Inactive — set API key in extension popup");
     return;
   }
 
-  console.log("[CoinScreener] Active — scanning every", settings.scanInterval, "seconds");
+  const interval = (settings.scanInterval || 5) * 1000;
+  console.log(`[CoinScreener] Active on ${SITE} — scanning every ${interval/1000}s`);
 
-  // Initial scan after a short delay (let DexScreener load)
-  setTimeout(() => scanPage(), 2000);
+  // Wait for page to render (both sites are SPAs)
+  setTimeout(() => scanPage(), 3000);
+  scanTimer = setInterval(() => scanPage(), interval);
 
-  // Recurring scan
-  scanTimer = setInterval(() => scanPage(), (settings.scanInterval || 5) * 1000);
-
-  // Also scan when the URL changes (DexScreener is a SPA)
+  // Re-scan on SPA navigation
   let lastUrl = location.href;
-  const observer = new MutationObserver(() => {
+  new MutationObserver(() => {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
-      setTimeout(() => scanPage(), 1500);
+      setTimeout(() => scanPage(), 2000);
     }
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
+  }).observe(document.body, { childList: true, subtree: true });
 }
 
 
-// ── Scrape tokens from the page ─────────────────────────────
+// ── Scrape tokens from DOM ──────────────────────────────────
 
 function scanPage() {
-  if (isRunning) return;
-  isRunning = true;
+  const tokens = SITE === "gmgn" ? scrapeGMGN() : scrapeDexScreener();
 
-  try {
-    const tokens = extractTokensFromDOM();
+  // Only send tokens we haven't evaluated yet
+  const newTokens = tokens.filter(t => !evaluated.has(t.address) && !pendingAddresses.has(t.address));
 
-    if (tokens.length > 0) {
-      // Send to background for evaluation
-      chrome.runtime.sendMessage({
-        type: "EVALUATE_TOKENS",
-        tokens: tokens,
-      });
-    }
-  } catch (err) {
-    console.warn("[CoinScreener] Scan error:", err);
+  if (newTokens.length > 0) {
+    newTokens.forEach(t => pendingAddresses.add(t.address));
+    chrome.runtime.sendMessage({ type: "EVALUATE_TOKENS", tokens: newTokens });
   }
 
-  isRunning = false;
+  // Re-apply existing badges (SPA may have re-rendered rows)
+  for (const [addr, result] of evaluated) {
+    applyBadge(addr, result);
+  }
 }
 
 
-function extractTokensFromDOM() {
+function scrapeGMGN() {
   const tokens = [];
   const seen = new Set();
 
-  // Strategy: find all links that point to token pair pages
-  // DexScreener URL pattern: /{chain}/{pairAddress}
-  // These appear as <a href="/solana/ABC123...">
-  const links = document.querySelectorAll('a[href]');
-
-  for (const link of links) {
+  // ── Strategy 1: Find links to token pages ─────────────────
+  // GMGN pattern: /sol/token/ADDRESS or /bsc/token/ADDRESS etc.
+  document.querySelectorAll('a[href]').forEach(link => {
     const href = link.getAttribute("href") || "";
-
-    // Match pattern: /chain/pairAddress (address is typically 30+ chars)
-    const match = href.match(
-      /^\/(solana|ethereum|base|bsc|arbitrum|polygon|avalanche|fantom|optimism|sui)\/([A-Za-z0-9]{30,})/
-    );
-    if (!match) continue;
+    const match = href.match(/\/(sol|bsc|eth|base|tron|monad)\/token\/([A-Za-z0-9]{20,})/);
+    if (!match) return;
 
     const chain = match[1];
-    const pairAddress = match[2];
+    const address = match[2];
+    if (seen.has(address)) return;
+    seen.add(address);
 
-    if (seen.has(pairAddress)) continue;
-    seen.add(pairAddress);
+    // Grab name/symbol from the link text or surrounding row
+    const row = findRow(link);
+    const { name, symbol } = extractNameSymbol(row || link);
 
-    // Try to extract name/symbol from the link's text content or nearby elements
-    const row = link.closest("tr, [class*='Row'], [class*='row'], [class*='pair'], div")
-      || link;
-    const textContent = row.textContent || "";
+    // Check if there's a twitter link visible near this token
+    const twitterUrl = findNearbyTwitter(row || link);
 
-    // Look for symbol pattern — usually uppercase 2-10 chars
-    const symbolMatch = textContent.match(/\b([A-Z$][A-Z0-9$]{1,9})\b/);
+    tokens.push({ chain: normalizeChain(chain), address, name, symbol, twitterUrl, element: link });
+  });
 
-    tokens.push({
-      chain,
-      pairAddress,
-      address: pairAddress, // will be resolved to token address by background
-      symbol: symbolMatch ? symbolMatch[1] : "?",
-      name: extractName(row),
-      element: link, // keep reference for overlay
-    });
-  }
+  // ── Strategy 2: Find raw Solana addresses in the page ─────
+  // Solana addresses are base58, typically 32-44 chars
+  document.querySelectorAll('[class*="address"], [class*="token"], [data-address]').forEach(el => {
+    const text = el.textContent?.trim() || el.dataset?.address || "";
+    const match = text.match(/([1-9A-HJ-NP-Za-km-z]{32,44})/);
+    if (match && !seen.has(match[1])) {
+      seen.add(match[1]);
+      const row = findRow(el);
+      const { name, symbol } = extractNameSymbol(row || el);
+      tokens.push({ chain: "solana", address: match[1], name, symbol, element: el });
+    }
+  });
+
+  // ── Strategy 3: Find EVM addresses (0x...) ────────────────
+  document.querySelectorAll('[class*="address"], [class*="token"]').forEach(el => {
+    const text = el.textContent?.trim() || "";
+    const match = text.match(/(0x[a-fA-F0-9]{40})/);
+    if (match && !seen.has(match[1])) {
+      seen.add(match[1]);
+      const row = findRow(el);
+      const { name, symbol } = extractNameSymbol(row || el);
+      // Chain detection: check URL or default to ethereum
+      const chain = location.pathname.includes("/bsc") ? "bsc"
+        : location.pathname.includes("/base") ? "base"
+        : "ethereum";
+      tokens.push({ chain, address: match[1], name, symbol, element: el });
+    }
+  });
 
   return tokens;
 }
 
 
-function extractName(element) {
-  // Try to find the token name from the DOM element
-  // DexScreener usually shows name in a specific span/div
-  const text = element.textContent || "";
-  // Get first reasonable-length text that isn't all caps (that's the symbol)
-  const parts = text.split(/[\n\t/]+/).map((s) => s.trim()).filter(Boolean);
-  for (const part of parts) {
-    if (part.length >= 3 && part.length <= 30 && !/^[A-Z0-9$]+$/.test(part)) {
-      return part;
-    }
-  }
-  return parts[0] || "?";
+function scrapeDexScreener() {
+  const tokens = [];
+  const seen = new Set();
+
+  document.querySelectorAll('a[href]').forEach(link => {
+    const href = link.getAttribute("href") || "";
+    const match = href.match(/^\/(solana|ethereum|base|bsc|arbitrum|polygon|avalanche|optimism|sui)\/([A-Za-z0-9]{20,})/);
+    if (!match) return;
+
+    const chain = match[1];
+    const address = match[2];
+    if (seen.has(address)) return;
+    seen.add(address);
+
+    const row = findRow(link);
+    const { name, symbol } = extractNameSymbol(row || link);
+    tokens.push({ chain, address, name, symbol, element: link });
+  });
+
+  return tokens;
 }
 
 
-// ── Receive results from background and overlay ─────────────
+// ── DOM helpers ─────────────────────────────────────────────
+
+function findRow(el) {
+  // Walk up the DOM to find the table row or card container
+  return el.closest('tr, [class*="row"], [class*="Row"], [class*="item"], [class*="Item"], [class*="card"], [class*="Card"], [class*="pair"], [class*="Pair"]')
+    || el.parentElement?.parentElement;
+}
+
+function extractNameSymbol(el) {
+  const text = el?.textContent || "";
+  // Symbol: uppercase 2-10 chars, possibly with $
+  const symMatch = text.match(/\$?([A-Z][A-Z0-9]{1,9})\b/);
+  // Name: first reasonable mixed-case string
+  const parts = text.split(/[\n\t/|·]+/).map(s => s.trim()).filter(s => s.length >= 2 && s.length <= 30);
+  const name = parts.find(p => !/^[A-Z0-9$]+$/.test(p) && !/^\d/.test(p)) || parts[0] || "?";
+
+  return { name, symbol: symMatch ? symMatch[1] : "?" };
+}
+
+function findNearbyTwitter(el) {
+  if (!el) return null;
+  // Look for twitter/x links within the same row or nearby
+  const container = el.closest('tr, div, [class*="row"], [class*="Row"]') || el;
+  const links = container.querySelectorAll('a[href*="x.com"], a[href*="twitter.com"]');
+  for (const link of links) {
+    const href = link.getAttribute("href");
+    if (href && (href.includes("x.com/") || href.includes("twitter.com/"))) {
+      return href;
+    }
+  }
+  return null;
+}
+
+function normalizeChain(chain) {
+  const map = { sol: "solana", bsc: "bsc", eth: "ethereum", base: "base", tron: "tron", monad: "monad" };
+  return map[chain] || chain;
+}
+
+
+// ── Receive results from background ─────────────────────────
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "TOKEN_RESULT") {
-    overlayResult(msg.address, msg);
+    pendingAddresses.delete(msg.address);
+    evaluated.set(msg.address, msg);
+    applyBadge(msg.address, msg);
   }
 });
 
 
-function overlayResult(address, result) {
-  // Find the link element for this token on the page
-  const links = document.querySelectorAll('a[href]');
-  for (const link of links) {
+// ── Badge overlay ───────────────────────────────────────────
+
+function applyBadge(address, result) {
+  // Find all elements linking to this token address
+  const allLinks = document.querySelectorAll('a[href]');
+  for (const link of allLinks) {
     const href = link.getAttribute("href") || "";
     if (!href.includes(address)) continue;
 
-    // Find the row container
-    const row = link.closest("tr, [class*='Row'], [class*='row'], div") || link;
+    const row = findRow(link);
+    if (!row) continue;
 
-    // Remove existing badge if any
-    const existing = row.querySelector(".cs-badge");
-    if (existing) existing.remove();
+    // Skip if badge already exists on this exact row
+    if (row.querySelector(`.cs-badge[data-addr="${address}"]`)) continue;
 
-    // Create badge
     const badge = document.createElement("div");
     badge.className = "cs-badge";
-    badge.dataset.address = address;
+    badge.dataset.addr = address;
 
-    const emoji = getVerdictEmoji(result.verdict);
-    const color = getScoreColor(result.score, result.verdict);
+    const emoji = { gem: "💎", interesting: "👀", meh: "😐", skip: "👎", scam: "🚩", error: "⚠️", pending: "⏳" }[result.verdict] || "❓";
+    const color = result.score < 0 ? "#555"
+      : result.score >= 70 ? "#16a34a"
+      : result.score >= 50 ? "#ca8a04"
+      : result.score >= 30 ? "#ea580c"
+      : "#dc2626";
 
     badge.innerHTML = `
-      <span class="cs-badge-score" style="background:${color}">${emoji} ${result.score >= 0 ? result.score : "?"}</span>
-      <span class="cs-badge-tooltip">
-        <strong>${result.verdict?.toUpperCase() || "?"}</strong><br>
-        ${escapeHtml(result.reason || "")}
+      <span class="cs-score" style="background:${color}">${emoji} ${result.score >= 0 ? result.score : "?"}</span>
+      <span class="cs-tip">
+        <strong>${(result.verdict || "?").toUpperCase()}</strong><br>
+        ${esc(result.reason || "Evaluating...")}
       </span>
     `;
 
-    // Insert badge — try to put it at the end of the row
-    row.style.position = "relative";
+    row.style.position = row.style.position || "relative";
     row.appendChild(badge);
-
-    break; // only first match
+    break; // one badge per address
   }
 }
 
-
-function getVerdictEmoji(verdict) {
-  const map = {
-    gem: "💎",
-    interesting: "👀",
-    meh: "😐",
-    skip: "👎",
-    scam: "🚩",
-    error: "⚠️",
-  };
-  return map[verdict] || "❓";
+function esc(s) {
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
 }
 
 
-function getScoreColor(score, verdict) {
-  if (score < 0 || verdict === "error") return "#666";
-  if (score >= 70) return "#16a34a";
-  if (score >= 50) return "#ca8a04";
-  if (score >= 30) return "#ea580c";
-  return "#dc2626";
-}
-
-
-function escapeHtml(text) {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
-}
-
-
-// ── Helpers ─────────────────────────────────────────────────
+// ── Settings ────────────────────────────────────────────────
 
 function getSettings() {
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage({ type: "GET_SETTINGS" }, (response) => {
-      resolve(response || { enabled: true, apiKey: "", scanInterval: 5 });
+  return new Promise(resolve => {
+    chrome.runtime.sendMessage({ type: "GET_SETTINGS" }, r => {
+      resolve(r || { enabled: true, apiKey: "", scanInterval: 5 });
     });
   });
 }

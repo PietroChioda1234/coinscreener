@@ -1,297 +1,211 @@
 /*
  * background.js — the brain
  *
- * Receives token addresses from the content script,
- * fetches social links + Twitter content,
- * calls Claude to evaluate meme quality,
- * sends scores back to content script.
+ * Receives token data from content script (GMGN or DexScreener),
+ * fetches Twitter/X content, calls Claude for meme evaluation,
+ * sends scores back.
  */
 
-// ── Cache to avoid re-evaluating the same token ─────────────
-// key: tokenAddress, value: { score, verdict, reason, timestamp }
-const cache = new Map();
-const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+const cache = new Map();      // address -> { score, verdict, reason, ts }
+const pending = new Set();    // addresses currently being evaluated
+const CACHE_TTL = 10 * 60_000;  // 10 min cache
 
-// Track in-flight evaluations to avoid duplicate calls
-const pending = new Set();
-
-
-// ── Listen for messages from content script ─────────────────
+// ── Message handler ─────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "EVALUATE_TOKENS") {
-    handleEvaluateTokens(msg.tokens, sender.tab?.id);
-    return false; // async — we'll send results via separate messages
+    handleTokens(msg.tokens, sender.tab?.id);
+    return false;
   }
-
   if (msg.type === "GET_SETTINGS") {
-    chrome.storage.local.get(["apiKey", "enabled", "scanInterval"], (data) => {
-      sendResponse(data);
-    });
-    return true; // keep channel open for async response
+    chrome.storage.local.get({ apiKey: "", enabled: true, scanInterval: 5 }, sendResponse);
+    return true;
   }
 });
 
 
-// ── Main evaluation pipeline ────────────────────────────────
+// ── Main pipeline ───────────────────────────────────────────
 
-async function handleEvaluateTokens(tokens, tabId) {
+async function handleTokens(tokens, tabId) {
   if (!tabId) return;
-
-  const settings = await getSettings();
-  if (!settings.enabled || !settings.apiKey) return;
+  const { apiKey, enabled } = await getSettings();
+  if (!enabled || !apiKey) return;
 
   for (const token of tokens) {
     const addr = token.address;
     if (!addr) continue;
 
-    // Check cache
+    // Cache hit?
     const cached = cache.get(addr);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-      sendResult(tabId, addr, cached);
+    if (cached && Date.now() - cached.ts < CACHE_TTL) {
+      send(tabId, addr, cached);
       continue;
     }
 
-    // Skip if already being evaluated
+    // Already in flight?
     if (pending.has(addr)) continue;
     pending.add(addr);
 
-    // Run evaluation (don't await — let them run in parallel, but throttled)
-    evaluateToken(token, settings.apiKey)
-      .then((result) => {
-        cache.set(addr, { ...result, timestamp: Date.now() });
-        sendResult(tabId, addr, result);
+    evaluate(token, apiKey)
+      .then(result => {
+        cache.set(addr, { ...result, ts: Date.now() });
+        send(tabId, addr, result);
       })
-      .catch((err) => {
-        console.warn(`[CoinScreener] Error evaluating ${token.symbol}:`, err.message);
-        sendResult(tabId, addr, { score: -1, verdict: "error", reason: err.message });
+      .catch(err => {
+        console.warn(`[CS] Error on ${token.symbol}:`, err.message);
+        send(tabId, addr, { score: -1, verdict: "error", reason: err.message });
       })
-      .finally(() => {
-        pending.delete(addr);
-      });
+      .finally(() => pending.delete(addr));
 
-    // Small delay between evaluations to avoid hammering APIs
-    await sleep(300);
+    // Throttle: don't slam APIs
+    await sleep(400);
   }
 }
 
 
-async function evaluateToken(token, apiKey) {
-  // Step 1: Get social links from DexScreener API
-  const socials = await fetchTokenSocials(token.chain, token.address);
+async function evaluate(token, apiKey) {
+  // Step 1: If content script found a Twitter URL already, use it
+  let twitterUrl = token.twitterUrl || null;
 
-  // Step 2: Find Twitter/X link
-  const twitterUrl = socials.find(
-    (s) => s.type === "twitter" || s.url?.includes("x.com") || s.url?.includes("twitter.com")
-  )?.url;
+  // Step 2: If not, try DexScreener API for socials
+  if (!twitterUrl) {
+    const socials = await fetchSocials(token.chain, token.address);
+    twitterUrl = socials.find(s =>
+      s.type === "twitter" || s.url?.includes("x.com") || s.url?.includes("twitter.com")
+    )?.url || null;
+  }
 
-  // If no Twitter, we can still do a basic eval on name/symbol
-  let twitterContent = null;
+  // Step 3: Fetch Twitter content
+  let twitterData = null;
   if (twitterUrl) {
-    twitterContent = await fetchTwitterContent(twitterUrl);
+    twitterData = await fetchTwitter(twitterUrl);
   }
 
-  // Step 3: Call Claude to evaluate
-  const evaluation = await callClaude(token, twitterContent, socials, apiKey);
-
-  return evaluation;
+  // Step 4: Ask Claude
+  return await askClaude(token, twitterData, apiKey);
 }
 
 
-// ── DexScreener API ─────────────────────────────────────────
+// ── DexScreener socials lookup ──────────────────────────────
 
-async function fetchTokenSocials(chain, address) {
+async function fetchSocials(chain, address) {
+  // Map chain names for DexScreener API
+  const chainMap = { bsc: "bsc", solana: "solana", ethereum: "ethereum", base: "base" };
+  const dsChain = chainMap[chain];
+  if (!dsChain) return [];
+
   try {
-    const resp = await fetch(
-      `https://api.dexscreener.com/tokens/v1/${chain}/${address}`
-    );
-    if (!resp.ok) return [];
-
-    const data = await resp.json();
-    if (!Array.isArray(data) || !data.length) return [];
-
-    // The first pair usually has the best data
-    const pair = data[0];
-    const info = pair.info || {};
-
-    return [
-      ...(info.socials || []),
-      ...(info.websites || []).map((w) => ({ type: "website", url: w.url })),
-    ];
-  } catch {
-    return [];
-  }
+    const r = await fetch(`https://api.dexscreener.com/tokens/v1/${dsChain}/${address}`);
+    if (!r.ok) return [];
+    const data = await r.json();
+    if (!Array.isArray(data) || !data[0]) return [];
+    const info = data[0].info || {};
+    return [...(info.socials || []), ...(info.websites || []).map(w => ({ type: "website", url: w.url }))];
+  } catch { return []; }
 }
 
 
-// ── Twitter/X content fetching ──────────────────────────────
+// ── Twitter fetching ────────────────────────────────────────
 
-async function fetchTwitterContent(url) {
-  // Normalize URL
-  let handle = url
-    .replace("https://", "")
-    .replace("http://", "")
-    .replace("www.", "")
-    .replace("twitter.com/", "")
-    .replace("x.com/", "")
-    .split("/")[0]
-    .split("?")[0];
-
+async function fetchTwitter(url) {
+  let handle = url.replace(/https?:\/\//, "").replace("www.", "")
+    .replace("twitter.com/", "").replace("x.com/", "")
+    .split("/")[0].split("?")[0];
   if (!handle) return null;
 
-  // Try fetching the X/Twitter page directly
-  // Chrome extension background scripts can bypass CORS via host_permissions
   try {
-    const resp = await fetch(`https://x.com/${handle}`, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        Accept: "text/html",
-      },
+    const r = await fetch(`https://x.com/${handle}`, {
+      headers: { "Accept": "text/html", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
     });
+    if (!r.ok) return { handle, content: null };
 
-    if (!resp.ok) return null;
+    const html = await r.text();
+    const parts = [];
 
-    const html = await resp.text();
+    // Pull meta description (usually bio)
+    const desc = html.match(/meta\s+(?:name|property)="(?:og:)?description"\s+content="([^"]*)"/i);
+    if (desc) parts.push("Bio: " + desc[1]);
 
-    // Extract useful text from the page (bio, pinned tweet, etc.)
-    // We just grab text content — the LLM can make sense of messy HTML
-    const textContent = extractTextFromHTML(html);
+    // Title
+    const title = html.match(/<title>([^<]*)<\/title>/i);
+    if (title) parts.push("Title: " + title[1]);
 
-    return {
-      handle,
-      url: `https://x.com/${handle}`,
-      content: textContent.slice(0, 2000), // keep it short for the LLM
-    };
+    // OG title
+    const ogt = html.match(/meta\s+property="og:title"\s+content="([^"]*)"/i);
+    if (ogt) parts.push("Profile: " + ogt[1]);
+
+    return { handle, content: parts.join("\n").slice(0, 2000) || null };
   } catch {
-    // X might block — that's OK, we proceed without it
-    return { handle, url: `https://x.com/${handle}`, content: null };
+    return { handle, content: null };
   }
 }
 
 
-function extractTextFromHTML(html) {
-  // Quick and dirty — pull text from meta tags and visible content
-  const parts = [];
+// ── Claude API ──────────────────────────────────────────────
 
-  // Get meta description (usually the bio)
-  const descMatch = html.match(
-    /meta\s+(?:name|property)="(?:og:)?description"\s+content="([^"]*)"/i
-  );
-  if (descMatch) parts.push("Bio: " + descMatch[1]);
+async function askClaude(token, twitter, apiKey) {
+  const hasTwitter = twitter?.content;
 
-  // Get title
-  const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
-  if (titleMatch) parts.push("Title: " + titleMatch[1]);
+  const prompt = `You are a meme coin analyst. Evaluate this token quickly.
 
-  // Get any og:image alt text
-  const imgMatch = html.match(
-    /meta\s+property="og:title"\s+content="([^"]*)"/i
-  );
-  if (imgMatch) parts.push("Profile: " + imgMatch[1]);
+TOKEN: ${token.symbol || "?"} — "${token.name || "?"}" on ${token.chain || "?"}
 
-  // Pull tweet-like content from data attributes or JSON-LD
-  const jsonLdMatch = html.match(
-    /<script type="application\/ld\+json">([^<]+)<\/script>/i
-  );
-  if (jsonLdMatch) {
-    try {
-      const ld = JSON.parse(jsonLdMatch[1]);
-      if (ld.description) parts.push("Page description: " + ld.description);
-    } catch {}
+${hasTwitter
+    ? `TWITTER @${twitter.handle}:\n${twitter.content}`
+    : twitter?.handle
+      ? `TWITTER: @${twitter.handle} (page didn't load)`
+      : "NO TWITTER FOUND"}
+
+Score 0-100 on:
+1. MEME QUALITY — Is the name/concept funny, original, culturally relevant? Would people share it?
+2. LEGITIMACY — Do socials look real or bot-generated?
+3. RED FLAGS — Copycat? Pump scheme? Fake engagement?
+
+Respond ONLY with this JSON, nothing else:
+{"score":<0-100>,"verdict":"<gem|interesting|meh|skip|scam>","reason":"<one sentence>"}`;
+
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 150,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+
+  if (!r.ok) {
+    const err = await r.text();
+    throw new Error(`API ${r.status}: ${err.slice(0, 80)}`);
   }
 
-  return parts.join("\n") || "Could not extract content";
-}
+  const data = await r.json();
+  const text = data.content?.[0]?.text || "";
+  const json = text.match(/\{[\s\S]*\}/);
+  if (!json) throw new Error("No JSON in response");
 
-
-// ── Claude API call ─────────────────────────────────────────
-
-async function callClaude(token, twitterContent, socials, apiKey) {
-  const hasSocials = socials.length > 0;
-  const hasTwitter = twitterContent?.content;
-  const socialList = socials.map((s) => `${s.type}: ${s.url}`).join("\n");
-
-  const prompt = `You are a meme coin analyst. Evaluate this token as a potential early meme coin buy.
-
-TOKEN INFO:
-- Name: ${token.name || "?"}
-- Symbol: ${token.symbol || "?"}
-- Chain: ${token.chain || "?"}
-
-${hasSocials ? `SOCIAL LINKS:\n${socialList}` : "NO SOCIAL LINKS FOUND (red flag)"}
-
-${hasTwitter ? `TWITTER/X CONTENT (@${twitterContent.handle}):\n${twitterContent.content}` : twitterContent?.handle ? `TWITTER: @${twitterContent.handle} (could not load content)` : "NO TWITTER FOUND"}
-
-Evaluate on these criteria:
-1. MEME QUALITY: Is the name/concept funny, original, culturally relevant, or shareable? Would people meme this?
-2. LEGITIMACY: Do the socials look real? Is there a community? Or does it look bot-generated / scammy?
-3. RED FLAGS: Any signs of pump-and-dump, fake engagement, or copycat project?
-
-Respond in EXACTLY this JSON format, nothing else:
-{"score": <0-100>, "verdict": "<gem|interesting|meh|skip|scam>", "reason": "<one sentence why>"}
-
-Score guide: 80+ = strong meme with real community, 60-79 = interesting/worth watching, 40-59 = mid/unclear, 20-39 = weak or suspicious, 0-19 = likely scam or dead.`;
-
-  try {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 200,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
-
-    if (!resp.ok) {
-      const err = await resp.text();
-      throw new Error(`Claude API ${resp.status}: ${err.slice(0, 100)}`);
-    }
-
-    const data = await resp.json();
-    const text = data.content?.[0]?.text || "";
-
-    // Parse JSON response
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("No JSON in response");
-
-    const result = JSON.parse(jsonMatch[0]);
-    return {
-      score: Math.max(0, Math.min(100, result.score || 0)),
-      verdict: result.verdict || "unknown",
-      reason: result.reason || "No reason given",
-    };
-  } catch (err) {
-    throw new Error(`Claude: ${err.message}`);
-  }
+  const result = JSON.parse(json[0]);
+  return {
+    score: Math.max(0, Math.min(100, result.score || 0)),
+    verdict: result.verdict || "unknown",
+    reason: result.reason || "",
+  };
 }
 
 
 // ── Helpers ─────────────────────────────────────────────────
 
-function sendResult(tabId, address, result) {
-  chrome.tabs.sendMessage(tabId, {
-    type: "TOKEN_RESULT",
-    address,
-    ...result,
-  });
+function send(tabId, address, result) {
+  chrome.tabs.sendMessage(tabId, { type: "TOKEN_RESULT", address, ...result });
 }
 
 function getSettings() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(
-      { apiKey: "", enabled: true, scanInterval: 5 },
-      resolve
-    );
-  });
+  return new Promise(r => chrome.storage.local.get({ apiKey: "", enabled: true, scanInterval: 5 }, r));
 }
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }

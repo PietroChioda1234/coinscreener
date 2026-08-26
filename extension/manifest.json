@@ -1,22 +1,29 @@
 {
   "manifest_version": 3,
   "name": "Coin Screener",
-  "version": "0.1.0",
-  "description": "Scans DexScreener in real time — AI evaluates meme quality from Twitter/X profiles",
+  "version": "0.2.0",
+  "description": "AI meme quality scanner — overlays on GMGN and DexScreener",
   "permissions": ["storage"],
   "host_permissions": [
+    "https://gmgn.ai/*",
     "https://dexscreener.com/*",
     "https://api.dexscreener.com/*",
     "https://x.com/*",
     "https://twitter.com/*",
-    "https://api.anthropic.com/*",
-    "https://nitter.net/*"
+    "https://api.anthropic.com/*"
   ],
   "content_scripts": [
     {
+      "matches": ["https://gmgn.ai/*"],
+      "js": ["content.js"],
+      "css": ["overlay.css"],
+      "run_at": "document_idle"
+    },
+    {
       "matches": ["https://dexscreener.com/*"],
       "js": ["content.js"],
-      "css": ["overlay.css"]
+      "css": ["overlay.css"],
+      "run_at": "document_idle"
     }
   ],
   "background": {
