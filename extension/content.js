@@ -209,6 +209,7 @@ function buildSidebar() {
 
         <div id="cs-settings-actions">
           <button id="cs-save">Save</button>
+          <button id="cs-defaults" style="background:#333;color:#888">Defaults</button>
           <span id="cs-saved"></span>
         </div>
       </div>
@@ -282,6 +283,25 @@ function buildSidebar() {
       applyFilter();
       // Update snapshot alarm
       chrome.runtime.sendMessage({ type: "UPDATE_ALARM", minutes: cfg.snapshotInterval });
+    });
+  };
+
+  // Defaults
+  document.getElementById("cs-defaults").onclick = () => {
+    cfg = { ...DEFAULTS };
+    document.getElementById("cs-key").value = cfg.apiKey;
+    for (const [key, val] of Object.entries({
+      'cs-iv': cfg.scanInterval, 'cs-snap': cfg.snapshotInterval,
+      'cs-th': cfg.maxTopHolders, 'cs-ins': cfg.maxInsiders,
+      'cs-bnd': cfg.maxBundle, 'cs-age': cfg.maxTrackAge, 'cs-max': cfg.maxTracked,
+    })) {
+      document.getElementById(key).value = val;
+      document.getElementById(sliders[key]).textContent = val;
+    }
+    chrome.storage.local.set(cfg, () => {
+      document.getElementById("cs-saved").textContent = "✓ Reset";
+      setTimeout(() => { document.getElementById("cs-saved").textContent = ""; }, 2000);
+      applyFilter();
     });
   };
 
