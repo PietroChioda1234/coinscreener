@@ -237,9 +237,12 @@ function addToFeed(token) {
   const chainShort = { solana:"SOL", ethereum:"ETH", base:"BASE", bsc:"BSC", tron:"TRON", monad:"MON" }[chain] || chain.slice(0,4).toUpperCase();
 
   let link;
-  if (SITE === "gmgn") {
-    const cMap = { solana:"sol", ethereum:"eth", base:"base", bsc:"bsc", tron:"tron", monad:"monad" };
-    link = `https://gmgn.ai/${cMap[chain] || chain}/token/${token.address}`;
+  if (token.pumpUrl) {
+    link = token.pumpUrl;
+  } else if (SITE === "gmgn") {
+    // GMGN main page uses ?chain=sol, token pages might use /sol/token/
+    const cMap = { solana:"sol", ethereum:"eth", base:"base", bsc:"bsc" };
+    link = `https://gmgn.ai/${cMap[chain] || "sol"}/token/${token.address}`;
   } else {
     link = `https://dexscreener.com/${chain}/${token.address}`;
   }
@@ -331,6 +334,18 @@ function scanPage() {
 function scrapeGMGN() {
   const tokens = [], seen = new Set();
 
+  // GMGN links to pump.fun/coin/ADDRESS for Solana tokens
+  document.querySelectorAll('a[href*="pump.fun/coin/"]').forEach(link => {
+    const m = (link.getAttribute("href") || "").match(/pump\.fun\/coin\/([A-Za-z0-9]{20,})/);
+    if (!m || seen.has(m[1])) return;
+    seen.add(m[1]);
+    const row = findRow(link);
+    const { name, symbol } = extractInfo(row || link);
+    const twitterUrl = findTwitter(row || link);
+    tokens.push({ chain: "solana", address: m[1], name, symbol, twitterUrl, pumpUrl: link.getAttribute("href") });
+  });
+
+  // Also check for any internal GMGN token links: /sol/token/ADDR etc.
   document.querySelectorAll('a[href*="/token/"]').forEach(link => {
     const m = (link.getAttribute("href") || "").match(/\/(sol|bsc|eth|base|tron|monad)\/token\/([A-Za-z0-9]{20,})/);
     if (!m || seen.has(m[2])) return;
@@ -342,15 +357,16 @@ function scrapeGMGN() {
     tokens.push({ chain, address: m[2], name, symbol, twitterUrl });
   });
 
-  // Raw Solana addresses
-  document.querySelectorAll('[class*="addr"], [class*="token"], [data-address], [class*="contract"]').forEach(el => {
-    const m = (el.textContent?.trim() || el.dataset?.address || "").match(/([1-9A-HJ-NP-Za-km-z]{32,44})/);
-    if (m && !seen.has(m[1])) {
-      seen.add(m[1]);
-      const row = findRow(el);
-      const { name, symbol } = extractInfo(row || el);
-      tokens.push({ chain: "solana", address: m[1], name, symbol });
-    }
+  // Also catch Raydium / letsbonk / other launchpad links
+  document.querySelectorAll('a[href*="raydium.io"], a[href*="letsbonk.fun"]').forEach(link => {
+    const href = link.getAttribute("href") || "";
+    const m = href.match(/([1-9A-HJ-NP-Za-km-z]{32,44})/);
+    if (!m || seen.has(m[1])) return;
+    seen.add(m[1]);
+    const row = findRow(link);
+    const { name, symbol } = extractInfo(row || link);
+    const twitterUrl = findTwitter(row || link);
+    tokens.push({ chain: "solana", address: m[1], name, symbol, twitterUrl });
   });
 
   return tokens;
@@ -370,8 +386,19 @@ function scrapeDexScreener() {
 }
 
 function findRow(el) {
-  return el.closest('tr, [class*="ow"], [class*="item"], [class*="Item"], [class*="card"], [class*="Card"], [class*="pair"], [class*="Pair"]')
-    || el.parentElement?.parentElement;
+  // Walk up looking for a container — GMGN uses divs, not tables
+  let node = el;
+  for (let i = 0; i < 6 && node; i++) {
+    node = node.parentElement;
+    if (!node) break;
+    // Stop at anything that looks like a row/card/item container
+    const cl = node.className || "";
+    if (cl.match(/row|item|card|pair|token|list/i)) return node;
+    // Or if it has multiple child links (likely a row with token + socials)
+    const childLinks = node.querySelectorAll('a[href]');
+    if (childLinks.length >= 3) return node;
+  }
+  return el.parentElement?.parentElement?.parentElement || el.parentElement;
 }
 
 function extractInfo(el) {
