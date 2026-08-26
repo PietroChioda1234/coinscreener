@@ -242,6 +242,8 @@ async function trackToken(token) {
     peakPrice: initPrice,
     peakMcap: initMcap,
     peakTime: now,
+    maxDrawdown: 0,       // worst % drop from any peak
+    maxDrawdownTime: null, // when it happened
     currentPrice: initPrice,
     currentMcap: initMcap,
     lastChecked: now,
@@ -286,6 +288,15 @@ async function takeSnapshots() {
         entry.peakPrice = price.priceUsd;
         entry.peakMcap = price.marketCap;
         entry.peakTime = now;
+      }
+
+      // Update max drawdown — worst % drop from peak at any point
+      if (entry.peakPrice > 0 && price.priceUsd < entry.peakPrice) {
+        const drawdown = ((price.priceUsd - entry.peakPrice) / entry.peakPrice) * 100;
+        if (drawdown < (entry.maxDrawdown || 0)) {
+          entry.maxDrawdown = drawdown;
+          entry.maxDrawdownTime = now;
+        }
       }
 
       // Add snapshot

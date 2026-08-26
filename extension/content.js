@@ -745,7 +745,9 @@ function renderTracked(tracked) {
         <div class="cs-tracked-prices">
           <span style="color:${pnlColor}">Now: ${hasPrice ? fmtPrice(cur) : ''} ${curMcap ? 'MC ' + fmtUsd(curMcap) : ''}${fmtPnl(mainPnl)}</span>
         </div>
-        <div style="font-size:10px;color:#444;margin-top:4px">${snapCount} snapshots · last checked ${t.lastChecked ? formatAge(Date.now() - t.lastChecked) + ' ago' : '—'}</div>
+        <div style="font-size:10px;color:#444;margin-top:4px">
+          ${t.maxDrawdown && t.maxDrawdown < -1 ? `<span style="color:#f87171">Max drawdown: ${t.maxDrawdown.toFixed(0)}% from peak</span> · ` : ''}${snapCount} snapshots · last checked ${t.lastChecked ? formatAge(Date.now() - t.lastChecked) + ' ago' : '—'}
+        </div>
       </div>
     `;
   }
