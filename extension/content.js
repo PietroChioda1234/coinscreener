@@ -135,6 +135,31 @@ const SIDEBAR_CSS = `
   color: #fff;
 }
 #cs-tab:hover { background: #1e1e2e; }
+
+#cs-status {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid #1e1e2e;
+  flex-shrink: 0;
+  font-size: 11px; color: #888;
+}
+#cs-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #555; flex-shrink: 0;
+}
+#cs-dot.active {
+  background: #22c55e;
+  animation: cs-pulse 1.5s ease-in-out infinite;
+}
+#cs-dot.waiting { background: #eab308; }
+#cs-dot.error { background: #ef4444; }
+@keyframes cs-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+#cs-status-text {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 `;
 
 // ── Build sidebar ───────────────────────────────────────────
@@ -174,6 +199,11 @@ function buildSidebar() {
       <div id="cs-empty">
         Scanning ${SITE}…<br>
         <span style="font-size:11px;color:#555">Results appear as tokens are found and evaluated</span>
+      </div>
+
+      <div id="cs-status">
+        <span id="cs-dot"></span>
+        <span id="cs-status-text">Starting…</span>
       </div>
     </div>
     <button id="cs-tab" style="display:none">🪙</button>
@@ -217,6 +247,13 @@ function buildSidebar() {
       const el = document.getElementById("cs-saved");
       el.textContent = "✓ Saved";
       setTimeout(() => { el.textContent = ""; }, 2000);
+
+      // Start scanning if key was just added
+      if (settings.apiKey) {
+        setStatus("Saved — scanning now…", "active");
+        settingsEl.style.display = "none";
+        setTimeout(() => scanPage(), 500);
+      }
     });
   };
 
@@ -307,14 +344,30 @@ function addToFeed(result) {
 function esc(s) { const d = document.createElement("span"); d.textContent = s; return d.innerHTML; }
 
 
+// ── Status bar helper ───────────────────────────────────────
+
+function setStatus(text, state = "active") {
+  const dot = document.getElementById("cs-dot");
+  const label = document.getElementById("cs-status-text");
+  if (dot) { dot.className = ""; dot.classList.add(state); }
+  if (label) label.textContent = text;
+}
+
+
 // ── Scraping ────────────────────────────────────────────────
 
 function scanPage() {
   const tokens = SITE === "gmgn" ? scrapeGMGN() : scrapeDexScreener();
   const newTokens = tokens.filter(t => !evaluated.has(t.address) && !pendingAddrs.has(t.address));
-  if (newTokens.length > 0) {
+
+  if (tokens.length === 0) {
+    setStatus(`No tokens found on page — scroll or navigate`, "waiting");
+  } else if (newTokens.length > 0) {
     newTokens.forEach(t => pendingAddrs.add(t.address));
     chrome.runtime.sendMessage({ type: "EVALUATE_TOKENS", tokens: newTokens });
+    setStatus(`Found ${newTokens.length} new · ${pendingAddrs.size} evaluating · ${evaluated.size} done`, "active");
+  } else {
+    setStatus(`Watching · ${evaluated.size} evaluated · ${tokens.length} on page`, "active");
   }
 }
 
@@ -391,6 +444,13 @@ chrome.runtime.onMessage.addListener((msg) => {
     pendingAddrs.delete(msg.address);
     evaluated.set(msg.address, msg);
     addToFeed(msg);
+
+    const pending = pendingAddrs.size;
+    if (pending > 0) {
+      setStatus(`Evaluating ${pending} more · ${evaluated.size} done`, "active");
+    } else {
+      setStatus(`Done · ${evaluated.size} evaluated · watching for new`, "active");
+    }
   }
 });
 
@@ -399,6 +459,7 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 async function init() {
   buildSidebar();
+  setStatus("Loading settings…", "waiting");
 
   // Load settings
   chrome.storage.local.get({ apiKey: "", enabled: true, scanInterval: 5 }, (data) => {
@@ -411,11 +472,16 @@ async function init() {
       document.getElementById("cs-settings").style.display = "block";
       document.getElementById("cs-empty").innerHTML =
         '⚙️ Paste your <a href="https://console.anthropic.com" target="_blank" style="color:#8b5cf6">Anthropic API key</a> above to start';
+      setStatus("Needs API key — open settings above", "error");
       return;
     }
 
     // Start scanning
-    setTimeout(() => scanPage(), 2000);
+    setStatus(`Ready — first scan in 2s on ${SITE}`, "waiting");
+    setTimeout(() => {
+      setStatus(`Scanning ${SITE}…`, "active");
+      scanPage();
+    }, 2000);
     setInterval(() => scanPage(), (data.scanInterval || 5) * 1000);
   });
 
