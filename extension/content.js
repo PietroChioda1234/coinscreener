@@ -305,21 +305,15 @@ function updateRugBadge(address, result) {
   const risksEl = document.getElementById(`cs-risks-${address}`);
   if (!badge) return;
 
-  if (result.score < 0) {
-    badge.textContent = "?";
-    badge.style.background = "#333";
-    badge.style.color = "#888";
-    return;
-  }
-
-  // RugCheck: lower score = safer. 0-300 good, 300-600 warning, 600+ danger
   let label, bg, color;
-  if (result.score <= 300) {
+  if (result.status === "Good") {
     label = "✅ Good"; bg = "#16a34a33"; color = "#4ade80";
-  } else if (result.score <= 600) {
+  } else if (result.status === "Warning") {
     label = "⚠️ Warn"; bg = "#ca8a0433"; color = "#facc15";
-  } else {
+  } else if (result.status === "Danger") {
     label = "🚩 Risk"; bg = "#dc262633"; color = "#f87171";
+  } else {
+    label = "? Check"; bg = "#333"; color = "#888";
   }
 
   badge.textContent = label;
@@ -328,17 +322,11 @@ function updateRugBadge(address, result) {
 
   // Show risk details
   if (risksEl && result.risks && result.risks.length > 0) {
-    const top3 = result.risks.slice(0, 3);
-    risksEl.innerHTML = top3.map(r => `⚠ ${esc(r.name)}`).join('<br>');
-  }
-  if (risksEl && result.flags && result.flags.length > 0) {
-    risksEl.innerHTML += (risksEl.innerHTML ? '<br>' : '') + result.flags.map(f => `⚠ ${esc(f)}`).join('<br>');
+    risksEl.innerHTML = result.risks.slice(0, 4).map(r => `⚠ ${esc(r.name)}`).join('<br>');
   }
 
-  // Update stored token data with rug result
   const token = found.get(address);
   if (token) {
-    token.rugScore = result.score;
     token.rugStatus = result.status;
   }
 }
