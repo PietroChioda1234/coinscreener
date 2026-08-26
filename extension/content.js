@@ -12,6 +12,131 @@ const pendingAddrs = new Set();
 let settings = { apiKey: "", enabled: true, scanInterval: 5 };
 let sidebarOpen = true;
 
+// ── CSS (must be defined before buildSidebar uses it) ───────
+
+const SIDEBAR_CSS = `
+#cs-sidebar {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: 320px; z-index: 999999;
+  background: #0a0a0f;
+  border-left: 1px solid #1e1e2e;
+  display: flex; flex-direction: column;
+  font-family: system-ui, -apple-system, sans-serif;
+  color: #d1d5db;
+  font-size: 13px;
+}
+
+#cs-drag {
+  position: absolute; left: -4px; top: 0; bottom: 0; width: 8px;
+  cursor: col-resize; z-index: 1000000;
+}
+#cs-drag:hover, #cs-drag:active { background: #8b5cf622; }
+
+#cs-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid #1e1e2e;
+  flex-shrink: 0;
+}
+#cs-title { font-weight: 800; font-size: 14px; }
+#cs-head-right { display: flex; align-items: center; gap: 8px; }
+#cs-count {
+  background: #8b5cf6; color: #fff; font-size: 11px; font-weight: 700;
+  padding: 1px 7px; border-radius: 10px; min-width: 20px; text-align: center;
+}
+#cs-gear, #cs-collapse {
+  background: none; border: none; color: #888; font-size: 16px;
+  cursor: pointer; padding: 2px;
+}
+#cs-gear:hover, #cs-collapse:hover { color: #fff; }
+
+#cs-settings {
+  padding: 10px 14px; border-bottom: 1px solid #1e1e2e;
+  flex-shrink: 0; background: #0f0f18;
+}
+#cs-settings label {
+  display: block; font-size: 11px; color: #888; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .4px; margin-bottom: 3px; margin-top: 8px;
+}
+#cs-settings label:first-child { margin-top: 0; }
+#cs-settings input[type="password"] {
+  width: 100%; padding: 7px 8px; border-radius: 6px;
+  border: 1px solid #2a2a3a; background: #141420; color: #e5e5e5;
+  font-size: 12px; font-family: monospace;
+}
+#cs-settings input[type="password"]:focus { outline: none; border-color: #8b5cf6; }
+#cs-settings input[type="range"] { width: 100%; accent-color: #8b5cf6; }
+#cs-settings-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+#cs-save {
+  padding: 6px 16px; border-radius: 6px; border: none;
+  background: #8b5cf6; color: #fff; font-weight: 700; font-size: 12px; cursor: pointer;
+}
+#cs-save:hover { background: #7c3aed; }
+#cs-saved { color: #22c55e; font-size: 12px; font-weight: 600; }
+
+#cs-feed {
+  flex: 1; overflow-y: auto; padding: 6px;
+  scrollbar-width: thin; scrollbar-color: #333 transparent;
+}
+
+#cs-empty {
+  padding: 40px 20px; text-align: center; color: #555;
+  font-size: 13px; line-height: 1.6;
+}
+
+.cs-card {
+  padding: 10px 12px; border-radius: 8px; margin-bottom: 4px;
+  border: 1px solid #1e1e2e;
+  transition: background .3s;
+  cursor: default;
+}
+.cs-card:hover { background: #1e1e2e; }
+
+.cs-card-top {
+  display: flex; align-items: center; gap: 6px;
+}
+.cs-card-emoji { font-size: 16px; }
+.cs-card-score {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-weight: 800; font-size: 15px;
+}
+.cs-card-sym {
+  font-weight: 700; font-size: 13px; color: #fff;
+}
+.cs-card-chain {
+  font-size: 10px; font-weight: 600; color: #888;
+  background: #1e1e2e; padding: 1px 5px; border-radius: 3px;
+  margin-left: auto;
+}
+
+.cs-card-name {
+  font-size: 11px; color: #888; margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.cs-card-reason {
+  font-size: 12px; color: #aaa; margin-top: 4px; line-height: 1.4;
+}
+
+.cs-card-link {
+  display: inline-block; margin-top: 6px;
+  font-size: 11px; color: #8b5cf6; text-decoration: none; font-weight: 600;
+}
+.cs-card-link:hover { color: #a78bfa; }
+
+#cs-tab {
+  position: fixed; right: 0; top: 50%; transform: translateY(-50%);
+  z-index: 999999;
+  width: 32px; height: 48px;
+  background: #0a0a0f; border: 1px solid #1e1e2e;
+  border-right: none; border-radius: 8px 0 0 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; cursor: pointer;
+  color: #fff;
+}
+#cs-tab:hover { background: #1e1e2e; }
+`;
+
 // ── Build sidebar ───────────────────────────────────────────
 
 function buildSidebar() {
@@ -305,130 +430,3 @@ async function init() {
 }
 
 init();
-
-
-// ── CSS (injected inline to avoid conflicts) ────────────────
-
-const SIDEBAR_CSS = `
-#cs-sidebar {
-  position: fixed; top: 0; right: 0; bottom: 0;
-  width: 320px; z-index: 999999;
-  background: #0a0a0f;
-  border-left: 1px solid #1e1e2e;
-  display: flex; flex-direction: column;
-  font-family: system-ui, -apple-system, sans-serif;
-  color: #d1d5db;
-  font-size: 13px;
-}
-
-#cs-drag {
-  position: absolute; left: -4px; top: 0; bottom: 0; width: 8px;
-  cursor: col-resize; z-index: 1000000;
-}
-#cs-drag:hover, #cs-drag:active { background: #8b5cf622; }
-
-#cs-head {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 10px 14px;
-  border-bottom: 1px solid #1e1e2e;
-  flex-shrink: 0;
-}
-#cs-title { font-weight: 800; font-size: 14px; }
-#cs-head-right { display: flex; align-items: center; gap: 8px; }
-#cs-count {
-  background: #8b5cf6; color: #fff; font-size: 11px; font-weight: 700;
-  padding: 1px 7px; border-radius: 10px; min-width: 20px; text-align: center;
-}
-#cs-gear, #cs-collapse {
-  background: none; border: none; color: #888; font-size: 16px;
-  cursor: pointer; padding: 2px;
-}
-#cs-gear:hover, #cs-collapse:hover { color: #fff; }
-
-#cs-settings {
-  padding: 10px 14px; border-bottom: 1px solid #1e1e2e;
-  flex-shrink: 0; background: #0f0f18;
-}
-#cs-settings label {
-  display: block; font-size: 11px; color: #888; font-weight: 600;
-  text-transform: uppercase; letter-spacing: .4px; margin-bottom: 3px; margin-top: 8px;
-}
-#cs-settings label:first-child { margin-top: 0; }
-#cs-settings input[type="password"] {
-  width: 100%; padding: 7px 8px; border-radius: 6px;
-  border: 1px solid #2a2a3a; background: #141420; color: #e5e5e5;
-  font-size: 12px; font-family: monospace;
-}
-#cs-settings input[type="password"]:focus { outline: none; border-color: #8b5cf6; }
-#cs-settings input[type="range"] { width: 100%; accent-color: #8b5cf6; }
-#cs-settings-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
-#cs-save {
-  padding: 6px 16px; border-radius: 6px; border: none;
-  background: #8b5cf6; color: #fff; font-weight: 700; font-size: 12px; cursor: pointer;
-}
-#cs-save:hover { background: #7c3aed; }
-#cs-saved { color: #22c55e; font-size: 12px; font-weight: 600; }
-
-#cs-feed {
-  flex: 1; overflow-y: auto; padding: 6px;
-  scrollbar-width: thin; scrollbar-color: #333 transparent;
-}
-
-#cs-empty {
-  padding: 40px 20px; text-align: center; color: #555;
-  font-size: 13px; line-height: 1.6;
-}
-
-.cs-card {
-  padding: 10px 12px; border-radius: 8px; margin-bottom: 4px;
-  border: 1px solid #1e1e2e;
-  transition: background .3s;
-  cursor: default;
-}
-.cs-card:hover { background: #1e1e2e; }
-
-.cs-card-top {
-  display: flex; align-items: center; gap: 6px;
-}
-.cs-card-emoji { font-size: 16px; }
-.cs-card-score {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-weight: 800; font-size: 15px;
-}
-.cs-card-sym {
-  font-weight: 700; font-size: 13px; color: #fff;
-}
-.cs-card-chain {
-  font-size: 10px; font-weight: 600; color: #888;
-  background: #1e1e2e; padding: 1px 5px; border-radius: 3px;
-  margin-left: auto;
-}
-
-.cs-card-name {
-  font-size: 11px; color: #888; margin-top: 2px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-
-.cs-card-reason {
-  font-size: 12px; color: #aaa; margin-top: 4px; line-height: 1.4;
-}
-
-.cs-card-link {
-  display: inline-block; margin-top: 6px;
-  font-size: 11px; color: #8b5cf6; text-decoration: none; font-weight: 600;
-}
-.cs-card-link:hover { color: #a78bfa; }
-
-/* Collapsed tab */
-#cs-tab {
-  position: fixed; right: 0; top: 50%; transform: translateY(-50%);
-  z-index: 999999;
-  width: 32px; height: 48px;
-  background: #0a0a0f; border: 1px solid #1e1e2e;
-  border-right: none; border-radius: 8px 0 0 8px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 18px; cursor: pointer;
-  color: #fff;
-}
-#cs-tab:hover { background: #1e1e2e; }
-`;
