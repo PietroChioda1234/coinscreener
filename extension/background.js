@@ -285,23 +285,24 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 async function fetchPrice(chain, address) {
   const chainMap = { solana: "solana", bsc: "bsc", ethereum: "ethereum", base: "base" };
   const c = chainMap[chain];
-  if (!c) return null;
 
-  // Try direct token lookup first
-  try {
-    const r = await fetch(`https://api.dexscreener.com/tokens/v1/${c}/${address}`);
-    if (r.ok) {
-      const data = await r.json();
-      if (Array.isArray(data) && data[0]?.priceUsd) {
-        return {
-          priceUsd: parseFloat(data[0].priceUsd) || 0,
-          marketCap: data[0].marketCap || data[0].fdv || 0,
-        };
+  // Method 1: Direct token lookup
+  if (c) {
+    try {
+      const r = await fetch(`https://api.dexscreener.com/tokens/v1/${c}/${address}`);
+      if (r.ok) {
+        const data = await r.json();
+        if (Array.isArray(data) && data[0]?.priceUsd) {
+          return {
+            priceUsd: parseFloat(data[0].priceUsd) || 0,
+            marketCap: data[0].marketCap || data[0].fdv || 0,
+          };
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
 
-  // Fallback: search by address
+  // Method 2: Search by address (works for tokens not indexed by chain)
   try {
     const r = await fetch(`https://api.dexscreener.com/latest/dex/search?q=${address}`);
     if (r.ok) {
@@ -315,6 +316,26 @@ async function fetchPrice(chain, address) {
       }
     }
   } catch {}
+
+  // Method 3: Try without "pump" suffix (some addresses end in "pump")
+  if (address.endsWith("pump") && address.length > 10) {
+    try {
+      const short = address.slice(0, -4);
+      const r = await fetch(`https://api.dexscreener.com/latest/dex/search?q=${short}`);
+      if (r.ok) {
+        const data = await r.json();
+        if (data?.pairs?.length) {
+          const pair = data.pairs[0];
+          if (pair.baseToken?.address === address || pair.pairAddress?.includes(address.slice(0, 20))) {
+            return {
+              priceUsd: parseFloat(pair.priceUsd) || 0,
+              marketCap: pair.marketCap || pair.fdv || 0,
+            };
+          }
+        }
+      }
+    } catch {}
+  }
 
   return null;
 }
@@ -388,35 +409,55 @@ async function takeSnapshots() {
 
     const now = Date.now();
     for (const entry of tracked) {
-      // Skip tokens older than 7 days — stop tracking
+      // Skip tokens older than 7 days
       if (now - entry.trackedAt > 7 * 24 * 60 * 60 * 1000) continue;
 
       const price = await fetchPrice(entry.chain, entry.address);
-      if (!price || !price.priceUsd) continue;
 
-      // Update current
-      entry.currentPrice = price.priceUsd;
-      entry.currentMcap = price.marketCap;
-      entry.lastChecked = now;
+      if (price && price.priceUsd) {
+        // Got price — full update
+        entry.currentPrice = price.priceUsd;
+        entry.currentMcap = price.marketCap;
+        entry.lastChecked = now;
 
-      // Update peak
-      if (price.priceUsd > (entry.peakPrice || 0)) {
-        entry.peakPrice = price.priceUsd;
-        entry.peakMcap = price.marketCap;
-        entry.peakTime = now;
-      }
-
-      // Update max drawdown — worst % drop from peak at any point
-      if (entry.peakPrice > 0 && price.priceUsd < entry.peakPrice) {
-        const drawdown = ((price.priceUsd - entry.peakPrice) / entry.peakPrice) * 100;
-        if (drawdown < (entry.maxDrawdown || 0)) {
-          entry.maxDrawdown = drawdown;
-          entry.maxDrawdownTime = now;
+        // Update initial price if we didn't have one before
+        if (!entry.initialPrice && price.priceUsd) {
+          entry.initialPrice = price.priceUsd;
+          entry.initialMcap = price.marketCap;
         }
-      }
 
-      // Add snapshot
-      entry.snapshots.push({ t: now, p: price.priceUsd, mc: price.marketCap });
+        // Update peak
+        if (price.priceUsd > (entry.peakPrice || 0)) {
+          entry.peakPrice = price.priceUsd;
+          entry.peakMcap = price.marketCap;
+          entry.peakTime = now;
+        }
+
+        // Update max drawdown
+        if (entry.peakPrice > 0 && price.priceUsd < entry.peakPrice) {
+          const drawdown = ((price.priceUsd - entry.peakPrice) / entry.peakPrice) * 100;
+          if (drawdown < (entry.maxDrawdown || 0)) {
+            entry.maxDrawdown = drawdown;
+            entry.maxDrawdownTime = now;
+          }
+        }
+
+        // Save snapshot
+        entry.snapshots.push({ t: now, p: price.priceUsd, mc: price.marketCap });
+      } else if (price && price.marketCap) {
+        // Got mcap but no price — partial update
+        entry.currentMcap = price.marketCap;
+        entry.lastChecked = now;
+        if (!entry.initialMcap) entry.initialMcap = price.marketCap;
+        if (price.marketCap > (entry.peakMcap || 0)) {
+          entry.peakMcap = price.marketCap;
+          entry.peakTime = now;
+        }
+        entry.snapshots.push({ t: now, mc: price.marketCap });
+      } else {
+        // Still no data — just mark that we tried
+        entry.lastChecked = now;
+      }
       // Keep max 200 snapshots (~16 hours at 5min intervals)
       if (entry.snapshots.length > 200) entry.snapshots.shift();
 
