@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🪙 Coin Screener</title>
+<style>
+  :root {
+    --bg: #0f0f0f; --card: #1a1a1a; --border: #2a2a2a;
+    --text: #e5e5e5; --dim: #888; --dimmer: #555;
+    --green: #4ade80; --red: #f87171; --yellow: #facc15;
+    --purple: #8b5cf6;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif; }
+  .mono { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; }
+
+  .app { max-width: 900px; margin: 0 auto; padding: 24px 16px; }
+
+  h1 { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
+  .subtitle { color: var(--dim); font-size: 13px; margin-top: 4px; }
+
+  .filters { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin: 20px 0; }
+  .filter-label { font-size: 12px; color: var(--dim); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  .chain-btns { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .chain-btn {
+    padding: 6px 14px; border-radius: 8px; font-size: 13px; font-weight: 600;
+    border: 1px solid var(--border); background: transparent; color: var(--dim);
+    cursor: pointer; transition: all 0.15s;
+  }
+  .chain-btn.active { background: color-mix(in srgb, var(--chain-color) 15%, transparent); color: var(--chain-color); border-color: var(--chain-color); }
+
+  .sliders { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 14px; }
+  .sliders input[type=range] { width: 100%; margin-top: 4px; accent-color: var(--purple); }
+
+  .scan-btn {
+    margin-top: 16px; width: 100%; padding: 12px 0; border-radius: 10px; border: none;
+    font-size: 15px; font-weight: 700; background: var(--purple); color: #fff;
+    cursor: pointer; transition: background 0.15s;
+  }
+  .scan-btn:disabled { background: #444; cursor: not-allowed; }
+  .scan-btn:hover:not(:disabled) { background: #7c3aed; }
+
+  .error { padding: 12px; border-radius: 8px; background: #dc262622; color: var(--red); margin-bottom: 16px; font-size: 13px; }
+
+  .results-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+  .results-header span { font-size: 13px; color: var(--dim); }
+  .results-header .hint { font-size: 11px; color: var(--dimmer); }
+
+  .col-headers {
+    display: grid; grid-template-columns: minmax(130px,2fr) 60px 80px 80px 80px 80px 60px 52px;
+    gap: 8px; padding: 4px 16px; font-size: 11px; color: var(--dimmer);
+    font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+  }
+
+  .token-row {
+    background: var(--card); border-radius: 10px; border: 1px solid var(--border);
+    margin-bottom: 8px; overflow: hidden;
+  }
+  .token-main {
+    display: grid; grid-template-columns: minmax(130px,2fr) 60px 80px 80px 80px 80px 60px 52px;
+    align-items: center; gap: 8px; padding: 12px 16px; cursor: pointer; font-size: 14px;
+  }
+  .token-main:hover { background: #ffffff06; }
+  .token-name { font-weight: 700; }
+  .token-fullname { color: var(--dim); margin-left: 6px; font-size: 12px; }
+
+  .chain-tag {
+    font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px;
+    text-transform: uppercase; letter-spacing: 0.5px; display: inline-block;
+  }
+
+  .score-badge {
+    display: inline-block; font-weight: 700; padding: 3px 10px; border-radius: 6px;
+    font-size: 13px; min-width: 42px; text-align: center; color: #fff;
+  }
+
+  .detail { padding: 0 16px 16px; border-top: 1px solid var(--border); }
+  .breakdown { display: grid; gap: 6px; padding: 12px 0 4px; }
+  .check-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+  .check-name { width: 70px; color: var(--dim); text-align: right; flex-shrink: 0; }
+  .check-bar { flex: 1; max-width: 120px; height: 6px; border-radius: 3px; background: var(--border); }
+  .check-fill { height: 100%; border-radius: 3px; }
+  .check-pts { width: 32px; font-size: 12px; color: var(--dim); }
+  .check-reason { font-size: 12px; }
+
+  .links { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .link-btn {
+    font-size: 12px; padding: 5px 12px; border-radius: 6px;
+    background: var(--border); color: var(--text); text-decoration: none; font-weight: 500;
+  }
+  .link-btn:hover { background: #3a3a3a; }
+  .addr-label { font-size: 11px; color: var(--dimmer); align-self: center; }
+
+  .empty { text-align: center; padding: 48px 20px; color: var(--dimmer); }
+  .empty .icon { font-size: 36px; margin-bottom: 8px; }
+  .empty p { font-size: 14px; }
+  .empty .sub { font-size: 12px; color: var(--dimmer); margin-top: 8px; max-width: 400px; margin-left: auto; margin-right: auto; }
+
+  .warning-box {
+    margin-top: 20px; padding: 16px; border-radius: 10px;
+    background: #ca8a0411; border: 1px solid #ca8a0433;
+    font-size: 12px; color: #ca8a04; line-height: 1.6;
+  }
+
+  .r { text-align: right; }
+
+  @media (max-width: 700px) {
+    .col-headers, .token-main {
+      grid-template-columns: 1fr 50px 65px 52px;
+    }
+    .hide-mobile { display: none; }
+    .sliders { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+
+<script>
+// ── Config ──────────────────────────────────────────────────
+
+const CHAINS = [
+  { id: "solana", label: "Solana", color: "#9945FF" },
+  { id: "base", label: "Base", color: "#0052FF" },
+  { id: "ethereum", label: "Ethereum", color: "#627EEA" },
+  { id: "bsc", label: "BSC", color: "#F0B90B" },
+  { id: "arbitrum", label: "Arbitrum", color: "#28A0F0" },
+];
+const CHAIN_SHORT = { solana:"SOL", base:"BASE", ethereum:"ETH", bsc:"BSC", arbitrum:"ARB" };
+const CHAIN_COLOR = Object.fromEntries(CHAINS.map(c => [c.id, c.color]));
+
+let state = {
+  chains: ["solana", "base"],
+  maxMcap: 5000000,
+  minLiq: 5000,
+  results: [],
+  loading: false,
+  status: "",
+  error: null,
+  expanded: null,
+  hasScanned: false,
+};
+
+// ── Safety scoring ──────────────────────────────────────────
+
+function scoreLiquidity(p) {
+  const l = p.liquidity?.usd||0, m = p.marketCap||p.fdv||0;
+  if (!m||!l) return {s:0,r:"No data",x:30};
+  const rt=l/m;
+  if(rt<0.05) return {s:0,r:`Low (${(rt*100).toFixed(1)}%)`,x:30};
+  if(rt>=0.5) return {s:30,r:`Excellent (${(rt*100).toFixed(1)}%)`,x:30};
+  if(rt>=0.2) return {s:25,r:`Good (${(rt*100).toFixed(1)}%)`,x:30};
+  if(rt>=0.1) return {s:18,r:`OK (${(rt*100).toFixed(1)}%)`,x:30};
+  return {s:10,r:`Thin (${(rt*100).toFixed(1)}%)`,x:30};
+}
+function scoreActivity(p) {
+  const b=p.txns?.h24?.buys||0, s=p.txns?.h24?.sells||0, t=b+s;
+  if(t<50) return {s:0,r:`Low (${t})`,x:25};
+  if(t>=1000) return {s:25,r:`High (${t})`,x:25};
+  if(t>=500) return {s:20,r:`Good (${t})`,x:25};
+  if(t>=200) return {s:15,r:`Moderate (${t})`,x:25};
+  return {s:8,r:`Some (${t})`,x:25};
+}
+function scoreBuySell(p) {
+  const b=p.txns?.h24?.buys||0, sl=p.txns?.h24?.sells||0;
+  if(!b&&!sl) return {s:0,r:"No txns",x:20};
+  if(!b) return {s:0,r:"No buys",x:20};
+  const rt=sl/b;
+  if(rt<0.2) return {s:0,r:`Suspicious (${rt.toFixed(2)})`,x:20};
+  if(rt>=0.3&&rt<=1.5) return {s:20,r:`Healthy (${rt.toFixed(2)})`,x:20};
+  if(rt>=0.2&&rt<=2.0) return {s:12,r:`OK (${rt.toFixed(2)})`,x:20};
+  return {s:5,r:`Skewed (${rt.toFixed(2)})`,x:20};
+}
+function scoreAge(p) {
+  const c=p.pairCreatedAt;
+  if(!c) return {s:5,r:"Unknown",x:15};
+  const h=(Date.now()-c)/3600000;
+  if(h<1) return {s:0,r:`Too new (${h.toFixed(1)}h)`,x:15};
+  if(h>168) return {s:8,r:`${(h/24).toFixed(0)}d old`,x:15};
+  if(h>=2&&h<=72) return {s:15,r:`${h.toFixed(0)}h — good`,x:15};
+  if(h<=2) return {s:5,r:`Very fresh (${h.toFixed(1)}h)`,x:15};
+  return {s:10,r:`${(h/24).toFixed(1)}d old`,x:15};
+}
+function scoreVolLiq(p) {
+  const v=p.volume?.h24||0, l=p.liquidity?.usd||0;
+  if(!l) return {s:0,r:"No liq",x:10};
+  const rt=v/l;
+  if(rt>=10) return {s:5,r:`${rt.toFixed(1)}x — wash risk`,x:10};
+  if(rt>=2) return {s:10,r:`${rt.toFixed(1)}x — strong`,x:10};
+  if(rt>=0.5) return {s:7,r:`${rt.toFixed(1)}x — decent`,x:10};
+  return {s:3,r:`${rt.toFixed(1)}x — low`,x:10};
+}
+
+function analyze(pair) {
+  const checks = [
+    {n:"Liquidity",...scoreLiquidity(pair)},
+    {n:"Activity",...scoreActivity(pair)},
+    {n:"Buy/Sell",...scoreBuySell(pair)},
+    {n:"Age",...scoreAge(pair)},
+    {n:"Vol/Liq",...scoreVolLiq(pair)},
+  ];
+  const total = checks.reduce((a,c)=>a+c.s,0);
+  const passed = checks.every(c=>c.s>0);
+  return { total, passed, checks };
+}
+
+// ── API ─────────────────────────────────────────────────────
+
+const API = "https://api.dexscreener.com";
+
+async function discover(chains, onStatus) {
+  const seen = new Set();
+  let all = [];
+
+  onStatus("Fetching latest profiles...");
+  try {
+    const profiles = await (await fetch(`${API}/token-profiles/latest/v1`)).json();
+    if (Array.isArray(profiles)) {
+      for (const p of profiles.filter(p=>chains.includes(p.chainId)).slice(0,30)) {
+        const k=`${p.chainId}/${p.tokenAddress}`;
+        if(seen.has(k)) continue; seen.add(k);
+        try { const d=await(await fetch(`${API}/tokens/v1/${k}`)).json(); if(Array.isArray(d)) all.push(...d); } catch{}
+      }
+    }
+  } catch {}
+
+  onStatus("Fetching boosted tokens...");
+  try {
+    const boosted = await (await fetch(`${API}/token-boosts/latest/v1`)).json();
+    if (Array.isArray(boosted)) {
+      for (const p of boosted.filter(p=>chains.includes(p.chainId)).slice(0,20)) {
+        const k=`${p.chainId}/${p.tokenAddress}`;
+        if(seen.has(k)) continue; seen.add(k);
+        try { const d=await(await fetch(`${API}/tokens/v1/${k}`)).json(); if(Array.isArray(d)) all.push(...d); } catch{}
+      }
+    }
+  } catch {}
+
+  onStatus("Searching meme tokens...");
+  try {
+    const data = await (await fetch(`${API}/latest/dex/search?q=meme`)).json();
+    if(data?.pairs) for(const p of data.pairs) {
+      const a=p.baseToken?.address;
+      if(chains.includes(p.chainId)&&a&&!seen.has(`${p.chainId}/${a}`)) { seen.add(`${p.chainId}/${a}`); all.push(p); }
+    }
+  } catch {}
+
+  return all;
+}
+
+// ── Format ──────────────────────────────────────────────────
+
+function fUSD(v) { if(!v) return "—"; if(v>=1e6) return `$${(v/1e6).toFixed(1)}M`; if(v>=1e3) return `$${(v/1e3).toFixed(1)}K`; return `$${v.toFixed(0)}`; }
+function fPrice(v) { const n=parseFloat(v); if(isNaN(n)) return "—"; if(n>=1) return `$${n.toFixed(2)}`; if(n>=.001) return `$${n.toFixed(4)}`; if(n>=1e-7) return `$${n.toFixed(8)}`; return `$${n.toExponential(2)}`; }
+function fChange(v) { if(v==null) return "—"; return v>=0?`+${v.toFixed(0)}%`:`${v.toFixed(0)}%`; }
+
+// ── Render ──────────────────────────────────────────────────
+
+function render() {
+  const {chains:sc, maxMcap, minLiq, results, loading, status, error, expanded, hasScanned} = state;
+  const passed = results.filter(r=>r._safety.passed).length;
+
+  let html = `
+    <h1>🪙 Coin Screener</h1>
+    <p class="subtitle">Find early meme coins. Check safety. Skip the rugs.</p>
+
+    <div class="filters">
+      <div class="filter-label">Chains</div>
+      <div class="chain-btns">
+        ${CHAINS.map(c=>`
+          <button class="chain-btn ${sc.includes(c.id)?'active':''}"
+            style="--chain-color:${c.color}" data-chain="${c.id}"
+            onclick="toggleChain('${c.id}')">${c.label}</button>
+        `).join("")}
+      </div>
+      <div class="sliders">
+        <div>
+          <label class="filter-label">Max market cap: ${fUSD(maxMcap)}</label>
+          <input type="range" min="100000" max="50000000" step="100000"
+            value="${maxMcap}" oninput="setMaxMcap(this.value)">
+        </div>
+        <div>
+          <label class="filter-label">Min liquidity: ${fUSD(minLiq)}</label>
+          <input type="range" min="1000" max="100000" step="1000"
+            value="${minLiq}" oninput="setMinLiq(this.value)">
+        </div>
+      </div>
+      <button class="scan-btn" ${loading?'disabled':''} onclick="doScan()">
+        ${loading ? `⏳ ${status||'Scanning...'}` : '🔍 Scan for Meme Coins'}
+      </button>
+    </div>
+  `;
+
+  if (error) html += `<div class="error">${error}</div>`;
+
+  if (hasScanned && !loading) {
+    html += `
+      <div class="results-header">
+        <span>${results.length} tokens found · ${passed} passed safety</span>
+        <span class="hint">Click a row for details</span>
+      </div>
+    `;
+
+    if (results.length) {
+      html += `
+        <div class="col-headers">
+          <span>Token</span><span>Chain</span>
+          <span class="r hide-mobile">Price</span><span class="r">MCap</span>
+          <span class="r hide-mobile">Liq</span><span class="r hide-mobile">Vol 24h</span>
+          <span class="r">24h</span><span class="r">Safe</span>
+        </div>
+      `;
+
+      results.forEach((t, i) => {
+        const sf = t._safety;
+        const ch24 = t.priceChange?.h24;
+        const chColor = ch24>=0 ? 'var(--green)' : 'var(--red)';
+        const sBg = !sf.passed ? '#dc2626' : sf.total>=70 ? '#16a34a' : sf.total>=45 ? '#ca8a04' : '#dc2626';
+        const cc = CHAIN_COLOR[t.chainId]||'#666';
+        const name = t.baseToken?.name||'';
+        const shortName = name.length > 18 ? name.slice(0,18)+'…' : name;
+
+        html += `
+          <div class="token-row">
+            <div class="token-main" onclick="toggle(${i})">
+              <div>
+                <span class="token-name">${t.baseToken?.symbol||'?'}</span>
+                <span class="token-fullname">${shortName}</span>
+              </div>
+              <span class="chain-tag" style="background:${cc}22;color:${cc}">${CHAIN_SHORT[t.chainId]||t.chainId}</span>
+              <span class="mono r hide-mobile" style="font-size:12px">${fPrice(t.priceUsd)}</span>
+              <span class="mono r" style="font-size:12px">${fUSD(t.marketCap||t.fdv)}</span>
+              <span class="mono r hide-mobile" style="font-size:12px">${fUSD(t.liquidity?.usd)}</span>
+              <span class="mono r hide-mobile" style="font-size:12px">${fUSD(t.volume?.h24)}</span>
+              <span class="mono r" style="font-size:12px;color:${chColor}">${fChange(ch24)}</span>
+              <div class="r"><span class="mono score-badge" style="background:${sBg}">${sf.total}</span></div>
+            </div>
+        `;
+
+        if (expanded === i) {
+          html += `<div class="detail"><div class="breakdown">`;
+          sf.checks.forEach(c => {
+            const pct = (c.s/c.x)*100;
+            const col = c.s===0?'#dc2626':c.s>=c.x*0.7?'#16a34a':'#ca8a04';
+            html += `
+              <div class="check-row">
+                <span class="check-name">${c.n}</span>
+                <div class="check-bar"><div class="check-fill" style="width:${pct}%;background:${col}"></div></div>
+                <span class="mono check-pts">${c.s}/${c.x}</span>
+                <span class="check-reason" style="color:${c.s===0?'var(--red)':'var(--dim)'}">${c.r}</span>
+              </div>
+            `;
+          });
+          html += `</div><div class="links">`;
+          if(t.url) html += `<a class="link-btn" href="${t.url}" target="_blank">DexScreener ↗</a>`;
+          if(t.chainId==='solana'&&t.baseToken?.address) html += `<a class="link-btn" href="https://rugcheck.xyz/tokens/${t.baseToken.address}" target="_blank">RugCheck ↗</a>`;
+          if(t.baseToken?.address) html += `<a class="link-btn" href="https://app.bubblemaps.io/${t.chainId}/token/${t.baseToken.address}" target="_blank">BubbleMaps ↗</a>`;
+          if(t.baseToken?.address) html += `<span class="mono addr-label">${t.baseToken.address.slice(0,8)}…${t.baseToken.address.slice(-6)}</span>`;
+          html += `</div></div>`;
+        }
+
+        html += `</div>`;
+      });
+    } else {
+      html += `<div class="empty"><p class="icon">🫥</p><p>No tokens matched your filters</p><p class="sub">Try increasing max market cap, lowering min liquidity, or adding more chains.</p></div>`;
+    }
+
+    if (passed > 0) {
+      html += `<div class="warning-box"><strong>Before buying anything</strong> — click a row and use the RugCheck / BubbleMaps links. This screener catches obvious red flags but can't detect every scam. Check the contract, wallet distribution, liquidity lock, and community. Never put in more than you can lose.</div>`;
+    }
+  }
+
+  if (!hasScanned && !loading) {
+    html += `<div class="empty"><p class="icon">👆</p><p>Pick your chains, set your filters, and hit scan.</p><p class="sub">The screener pulls new tokens from DexScreener, filters by your criteria, and scores each one for safety on a 0–100 scale.</p></div>`;
+  }
+
+  document.getElementById("app").innerHTML = html;
+}
+
+// ── Actions ─────────────────────────────────────────────────
+
+function toggleChain(id) {
+  if(state.chains.includes(id)) state.chains=state.chains.filter(c=>c!==id);
+  else state.chains.push(id);
+  render();
+}
+function setMaxMcap(v) { state.maxMcap=Number(v); render(); }
+function setMinLiq(v) { state.minLiq=Number(v); render(); }
+function toggle(i) { state.expanded = state.expanded===i ? null : i; render(); }
+
+async function doScan() {
+  if(!state.chains.length) { state.error="Pick at least one chain"; render(); return; }
+  state.loading=true; state.error=null; state.results=[]; state.expanded=null; render();
+
+  try {
+    const raw = await discover(state.chains, s=>{ state.status=s; render(); });
+    state.status="Filtering & scoring..."; render();
+
+    const filtered = raw.filter(p => {
+      if(!state.chains.includes(p.chainId)) return false;
+      if(!p.baseToken?.name||!p.baseToken?.symbol) return false;
+      const m=p.marketCap||p.fdv||0;
+      if(m<10000||m>state.maxMcap) return false;
+      const l=p.liquidity?.usd||0;
+      if(l<state.minLiq) return false;
+      if((p.volume?.h24||0)<500) return false;
+      return true;
+    });
+
+    const scored = filtered.map(p=>({...p, _safety:analyze(p)}));
+    scored.sort((a,b)=>b._safety.total-a._safety.total||(b.volume?.h24||0)-(a.volume?.h24||0));
+
+    const deduped = []; const seenA = new Set();
+    for(const p of scored) { const a=p.baseToken?.address; if(a&&seenA.has(a)) continue; if(a) seenA.add(a); deduped.push(p); }
+
+    state.results = deduped.slice(0, 30);
+    state.hasScanned = true;
+  } catch(e) { state.error = e.message; }
+  state.loading=false; state.status=""; render();
+}
+
+// ── Boot ────────────────────────────────────────────────────
+render();
+</script>
+</body>
+</html>

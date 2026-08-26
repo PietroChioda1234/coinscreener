@@ -6,7 +6,7 @@ A simple meme coin screener that finds early tokens and checks them for safety r
 1. Pulls new/trending tokens from DexScreener (free API, no key needed)
 2. Filters by your criteria (market cap, liquidity, volume, chain, age)
 3. Scores each token for safety (liquidity ratio, trading activity, buy/sell balance)
-4. Ranks results and gives you quick links to do deeper checks
+4. Ranks results and gives you quick links to do deeper checks (RugCheck, BubbleMaps)
 
 **What it does NOT do:**
 - This is a first-pass screener. It catches obvious red flags but **cannot detect** every scam.
@@ -15,52 +15,25 @@ A simple meme coin screener that finds early tokens and checks them for safety r
 
 ---
 
-## Quick Start
+## Quick Start (Web App)
+
+**Just open `index.html` in your browser.** That's it — no server, no install, no build step.
+
+1. Pick your chains (Solana, Base, Ethereum, BSC, Arbitrum)
+2. Set max market cap and min liquidity with the sliders
+3. Hit **Scan for Meme Coins**
+4. Click any row to see the safety breakdown + links to RugCheck / BubbleMaps
+
+You can also deploy it to GitHub Pages or any static host.
+
+## CLI Version (optional)
+
+There's also a Python CLI for scripting or automation:
 
 ```bash
-# 1. Clone
-git clone https://github.com/PietroChioda1234/coinscreener.git
-cd coinscreener
-
-# 2. Install deps
 pip install -r requirements.txt
-
-# 3. Run
-python run.py
+python run.py --chain solana --top 10 --detail
 ```
-
-## Usage
-
-```bash
-# Full scan (uses config.yaml defaults)
-python run.py
-
-# Scan only Solana
-python run.py --chain solana
-
-# Show top 5 with safety details
-python run.py --top 5 --detail
-
-# Look for bigger caps (up to 10M)
-python run.py --max-mcap 10000000
-
-# Scan Base chain, low cap gems
-python run.py --chain base --max-mcap 1000000
-```
-
-## Configuration
-
-Edit `config.yaml` to tune the screener:
-
-| Setting | What it does | Default |
-|---|---|---|
-| `chains` | Which blockchains to scan | solana, base, ethereum |
-| `market_cap.min/max` | Market cap range (USD) | $10K – $5M |
-| `liquidity.min` | Minimum liquidity to consider | $5K |
-| `pair_age.min/max_hours` | How old the token can be | 1h – 168h (7 days) |
-| `safety.min_liquidity_ratio` | Min liquidity/mcap ratio | 5% |
-| `safety.min_buy_sell_ratio` | Min sells/buys ratio | 0.2 |
-| `safety.min_txns_24h` | Minimum 24h transactions | 50 |
 
 ## Safety Scoring (0–100)
 
@@ -91,9 +64,12 @@ The screener is step 1. Before buying, always:
 
 ```
 coinscreener/
-├── run.py              # CLI entry point
-├── config.yaml         # All filters and thresholds
-├── requirements.txt    # Python dependencies
+├── index.html          # ← Web app — just open in browser
+├── run.py              # CLI entry point (Python)
+├── config.yaml         # CLI filters and thresholds
+├── requirements.txt    # Python dependencies (CLI only)
+├── app/
+│   └── index.jsx       # React component (for embedding)
 └── screener/
     ├── api.py          # DexScreener API client
     ├── safety.py       # Safety scoring engine
