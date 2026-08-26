@@ -735,6 +735,8 @@ function renderTracked(tracked) {
 
   for (const t of tracked) {
     const age = formatAge(Date.now() - t.trackedAt);
+    const entryTime = new Date(t.trackedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const entryDate = new Date(t.trackedAt).toLocaleDateString([], { month: 'short', day: 'numeric' });
     const init = t.initialPrice || 0;
     const peak = t.peakPrice || 0;
     const cur = t.currentPrice || 0;
@@ -744,6 +746,16 @@ function renderTracked(tracked) {
     const hasPrice = init > 0 && cur > 0;
     const hasMcap = initMcap > 0;
 
+    // Build chart links
+    const gmgnLink = `https://gmgn.ai/sol/token/${t.address}`;
+    const dexLink = `https://dexscreener.com/solana/${t.address}`;
+    const pumpLink = `https://pump.fun/coin/${t.address}`;
+    const linksHtml = `<div style="display:flex;gap:8px;margin-top:6px">
+      <a href="${gmgnLink}" target="_blank" style="font-size:11px;color:#8b5cf6;text-decoration:none;font-weight:600">GMGN →</a>
+      <a href="${dexLink}" target="_blank" style="font-size:11px;color:#8b5cf6;text-decoration:none;font-weight:600">DexScreener →</a>
+      <a href="${pumpLink}" target="_blank" style="font-size:11px;color:#8b5cf6;text-decoration:none;font-weight:600">Pump →</a>
+    </div>`;
+
     // If we have nothing at all, show minimal card
     if (!hasPrice && !hasMcap) {
       html += `
@@ -751,9 +763,10 @@ function renderTracked(tracked) {
           <div class="cs-tracked-top">
             <span class="cs-tracked-sym">${esc(t.symbol)}</span>
             <span style="font-size:11px;color:#888">${esc(t.twitterHandle ? '@' + t.twitterHandle : '')}</span>
-            <span class="cs-tracked-time">${age} ago</span>
+            <span class="cs-tracked-time">${entryDate} ${entryTime}</span>
           </div>
-          <div style="font-size:11px;color:#555;margin-top:4px">Waiting for price data…</div>
+          <div style="font-size:11px;color:#555;margin-top:4px">Waiting for price data… (${age} ago)</div>
+          ${linksHtml}
         </div>
       `;
       continue;
@@ -792,9 +805,9 @@ function renderTracked(tracked) {
         <div class="cs-tracked-top">
           <span class="cs-tracked-sym">${esc(t.symbol)}</span>
           <span style="font-size:11px;color:#888">${esc(t.twitterHandle ? '@' + t.twitterHandle : '')}</span>
-          <span class="cs-tracked-time">${age} ago</span>
+          <span class="cs-tracked-time">${entryDate} ${entryTime}</span>
         </div>
-        <div style="font-size:12px;color:${trajColor};font-weight:600;margin:4px 0">${trajectory}</div>
+        <div style="font-size:12px;color:${trajColor};font-weight:600;margin:4px 0">${trajectory} <span style="color:#555;font-weight:400;font-size:10px">${age} ago</span></div>
         <div class="cs-tracked-prices">
           <span>Entry: ${hasPrice ? fmtPrice(init) : ''} ${hasMcap ? 'MC ' + fmtUsd(initMcap) : ''}</span>
         </div>
@@ -806,8 +819,9 @@ function renderTracked(tracked) {
           <span style="color:${pnlColor}">Now: ${hasPrice ? fmtPrice(cur) : ''} ${curMcap ? 'MC ' + fmtUsd(curMcap) : ''}${fmtPnl(mainPnl)}</span>
         </div>
         <div style="font-size:10px;color:#444;margin-top:4px">
-          ${t.mae && t.mae < -1 ? `<span style="color:#f97316">MAE: ${t.mae.toFixed(0)}% from entry</span> · ` : ''}${t.maxDrawdown && t.maxDrawdown < -1 ? `<span style="color:#f87171">Max DD: ${t.maxDrawdown.toFixed(0)}% from peak</span> · ` : ''}${snapCount} snapshots · last checked ${t.lastChecked ? formatAge(Date.now() - t.lastChecked) + ' ago' : '—'}
+          ${t.mae && t.mae < -1 ? `<span style="color:#f97316">MAE: ${t.mae.toFixed(0)}% from entry</span> · ` : ''}${t.maxDrawdown && t.maxDrawdown < -1 ? `<span style="color:#f87171">Max DD: ${t.maxDrawdown.toFixed(0)}% from peak</span> · ` : ''}${snapCount} snapshots
         </div>
+        ${linksHtml}
       </div>
     `;
   }
