@@ -341,8 +341,13 @@ function passesFilter(token) {
   if (filterLevel === "easy") return true;
   if (filterLevel === "medium") return !!token.twitter;
   if (filterLevel === "high") {
+    // Must have Twitter + at least one more social
     const socials = [token.twitter, token.telegram, token.website].filter(Boolean).length;
-    return !!token.twitter && socials >= 2;
+    if (!token.twitter || socials < 2) return false;
+    // Must NOT be flagged as Danger by RugCheck
+    // (tokens still pending check are shown — they get hidden if result is bad)
+    if (token.rugStatus === "Danger") return false;
+    return true;
   }
   return true;
 }
@@ -569,6 +574,8 @@ function extractInfo(el) {
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "RUG_RESULT") {
     updateRugBadge(msg.address, msg);
+    // Re-apply filter — a Danger result should hide the card in SAFE mode
+    if (filterLevel === "high") applyFilter();
   }
 });
 
