@@ -392,21 +392,23 @@ function scanPage() {
 
   const newTokens = [];
   for (const t of tokens) {
-    // Skip if we already have this exact address
     if (found.has(t.address)) continue;
 
-    // Deduplicate: skip if same twitter handle + symbol already in feed
-    // (same project launching multiple contracts)
+    // Deduplicate: if same twitter handle + symbol exists, remove the old one
     if (t.twitterHandle && t.symbol) {
       const dupeKey = `${t.twitterHandle.toLowerCase()}_${t.symbol.toLowerCase()}`;
-      let isDupe = false;
-      for (const [, existing] of found) {
+      for (const [oldAddr, existing] of found) {
         if (existing.twitterHandle && existing.symbol) {
           const existingKey = `${existing.twitterHandle.toLowerCase()}_${existing.symbol.toLowerCase()}`;
-          if (existingKey === dupeKey) { isDupe = true; break; }
+          if (existingKey === dupeKey) {
+            // Remove old card from DOM and map
+            const oldCard = document.querySelector(`.cs-card[data-address="${oldAddr}"]`);
+            if (oldCard) oldCard.remove();
+            found.delete(oldAddr);
+            break;
+          }
         }
       }
-      if (isDupe) continue;
     }
 
     found.set(t.address, t);
