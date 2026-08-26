@@ -19,6 +19,11 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
   if (msg.type === "GET_TRACKED") {
     refreshTracked(sender.tab?.id);
   }
+  if (msg.type === "UPDATE_ALARM") {
+    chrome.alarms.clear("price-snapshot", () => {
+      chrome.alarms.create("price-snapshot", { periodInMinutes: msg.minutes || 5 });
+    });
+  }
 });
 
 async function checkTokens(tokens, tabId) {
@@ -176,10 +181,11 @@ function sendRug(tabId, address, result) {
 // ── Token tracking + price snapshots ────────────────────────
 
 // Auto-snapshot — only create alarm if it doesn't exist yet
-// (service worker restarts re-run this code, which would reset the timer)
 chrome.alarms.get("price-snapshot", (existing) => {
   if (!existing) {
-    chrome.alarms.create("price-snapshot", { periodInMinutes: 5 });
+    chrome.storage.local.get({ snapshotInterval: 5 }, (data) => {
+      chrome.alarms.create("price-snapshot", { periodInMinutes: data.snapshotInterval || 5 });
+    });
   }
 });
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -287,14 +293,12 @@ async function trackToken(token) {
     snapshots: initPrice ? [{ t: now, p: initPrice, mc: initMcap }] : [],
   };
 
-  chrome.storage.local.get({ tracked: [] }, (data) => {
+  chrome.storage.local.get({ tracked: [], maxTracked: 200 }, (data) => {
     const tracked = data.tracked;
-    // Check dupes by address
     if (tracked.find(t => t.address === token.address)) {
       trackingPending.delete(dupeKey);
       return;
     }
-    // Check dupes by handle+symbol
     if (token.twitterHandle && token.symbol) {
       const key = `${token.twitterHandle.toLowerCase()}_${token.symbol.toLowerCase()}`;
       if (tracked.find(t => t.twitterHandle && t.symbol &&
@@ -304,7 +308,7 @@ async function trackToken(token) {
       }
     }
     tracked.push(entry);
-    if (tracked.length > 200) tracked.shift();
+    while (tracked.length > (data.maxTracked || 200)) tracked.shift();
     chrome.storage.local.set({ tracked }, () => {
       trackingPending.delete(dupeKey);
     });
@@ -312,14 +316,15 @@ async function trackToken(token) {
 }
 
 async function takeSnapshots() {
-  chrome.storage.local.get({ tracked: [] }, async (data) => {
+  chrome.storage.local.get({ tracked: [], maxTrackAge: 7 }, async (data) => {
     const tracked = data.tracked;
     if (!tracked.length) return;
 
     const now = Date.now();
+    const maxAge = (data.maxTrackAge || 7) * 24 * 60 * 60 * 1000;
     for (const entry of tracked) {
-      // Skip tokens older than 7 days
-      if (now - entry.trackedAt > 7 * 24 * 60 * 60 * 1000) continue;
+      // Skip tokens older than configured max age
+      if (now - entry.trackedAt > maxAge) continue;
 
       const price = await fetchPrice(entry.chain, entry.address);
 

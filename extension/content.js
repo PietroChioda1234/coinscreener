@@ -178,10 +178,35 @@ function buildSidebar() {
         </div>
       </div>
       <div id="cs-settings" style="display:none">
-        <label>API Key <span style="font-weight:400;text-transform:none;color:#555">(optional — enables AI scoring)</span></label>
+        <label>API Key <span style="font-weight:400;text-transform:none;color:#555">(optional — AI scoring)</span></label>
         <input type="password" id="cs-key" placeholder="sk-ant-api03-..." spellcheck="false">
-        <label>Scan interval: <span id="cs-iv-label">3</span>s</label>
-        <input type="range" id="cs-iv" min="2" max="30" value="3">
+
+        <div style="margin-top:10px;padding-top:8px;border-top:1px solid #1e1e2e">
+          <div style="font-size:10px;color:#666;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Scanning</div>
+          <label>Scan interval: <span id="cs-iv-label">3</span>s</label>
+          <input type="range" id="cs-iv" min="2" max="30" value="3">
+          <label>Snapshot interval: <span id="cs-snap-label">5</span> min</label>
+          <input type="range" id="cs-snap" min="2" max="30" value="5">
+        </div>
+
+        <div style="margin-top:10px;padding-top:8px;border-top:1px solid #1e1e2e">
+          <div style="font-size:10px;color:#666;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">🔴 SAFE filter thresholds</div>
+          <label>Max top holders: <span id="cs-th-label">25</span>%</label>
+          <input type="range" id="cs-th" min="5" max="60" value="25">
+          <label>Max insiders: <span id="cs-ins-label">10</span>%</label>
+          <input type="range" id="cs-ins" min="0" max="30" value="10">
+          <label>Max bundle: <span id="cs-bnd-label">20</span>%</label>
+          <input type="range" id="cs-bnd" min="5" max="50" value="20">
+        </div>
+
+        <div style="margin-top:10px;padding-top:8px;border-top:1px solid #1e1e2e">
+          <div style="font-size:10px;color:#666;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Tracking</div>
+          <label>Stop tracking after: <span id="cs-age-label">7</span> days</label>
+          <input type="range" id="cs-age" min="1" max="30" value="7">
+          <label>Max tracked tokens: <span id="cs-max-label">200</span></label>
+          <input type="range" id="cs-max" min="50" max="500" step="50" value="200">
+        </div>
+
         <div id="cs-settings-actions">
           <button id="cs-save">Save</button>
           <span id="cs-saved"></span>
@@ -223,19 +248,40 @@ function buildSidebar() {
   };
 
   // Interval slider
-  const ivSlider = document.getElementById("cs-iv");
-  document.getElementById("cs-iv").oninput = () => {
-    document.getElementById("cs-iv-label").textContent = ivSlider.value;
+  const sliders = {
+    'cs-iv': 'cs-iv-label',
+    'cs-snap': 'cs-snap-label',
+    'cs-th': 'cs-th-label',
+    'cs-ins': 'cs-ins-label',
+    'cs-bnd': 'cs-bnd-label',
+    'cs-age': 'cs-age-label',
+    'cs-max': 'cs-max-label',
   };
+  for (const [sliderId, labelId] of Object.entries(sliders)) {
+    document.getElementById(sliderId).oninput = function() {
+      document.getElementById(labelId).textContent = this.value;
+    };
+  }
 
   // Save
   document.getElementById("cs-save").onclick = () => {
-    chrome.storage.local.set({
+    const cfg = {
       apiKey: document.getElementById("cs-key").value.trim(),
-      scanInterval: parseInt(ivSlider.value) || 3,
-    }, () => {
+      scanInterval: parseInt(document.getElementById("cs-iv").value) || 3,
+      snapshotInterval: parseInt(document.getElementById("cs-snap").value) || 5,
+      maxTopHolders: parseInt(document.getElementById("cs-th").value) || 25,
+      maxInsiders: parseInt(document.getElementById("cs-ins").value) || 10,
+      maxBundle: parseInt(document.getElementById("cs-bnd").value) || 20,
+      maxTrackAge: parseInt(document.getElementById("cs-age").value) || 7,
+      maxTracked: parseInt(document.getElementById("cs-max").value) || 200,
+    };
+    chrome.storage.local.set(cfg, () => {
       document.getElementById("cs-saved").textContent = "✓ Saved";
       setTimeout(() => { document.getElementById("cs-saved").textContent = ""; }, 2000);
+      // Re-apply filter with new thresholds
+      applyFilter();
+      // Update snapshot alarm
+      chrome.runtime.sendMessage({ type: "UPDATE_ALARM", minutes: cfg.snapshotInterval });
     });
   };
 
@@ -385,15 +431,12 @@ function passesFilter(token) {
   if (filterLevel === "easy") return true;
   if (filterLevel === "medium") return !!token.twitter;
   if (filterLevel === "high") {
-    // Must have Twitter + at least one more social
     const socials = [token.twitter, token.telegram, token.website].filter(Boolean).length;
     if (!token.twitter || socials < 2) return false;
-    // Rug check must NOT be Danger
     if (token.rugStatus === "Danger") return false;
-    // On-chain red flags
-    if (token.topHolders !== null && token.topHolders > 25) return false;   // top holders too concentrated
-    if (token.insiderPct !== null && token.insiderPct > 10) return false;   // too many insiders
-    if (token.bundlePct !== null && token.bundlePct > 20) return false;     // too many bundle buys
+    if (token.topHolders !== null && token.topHolders > cfg.maxTopHolders) return false;
+    if (token.insiderPct !== null && token.insiderPct > cfg.maxInsiders) return false;
+    if (token.bundlePct !== null && token.bundlePct > cfg.maxBundle) return false;
     return true;
   }
   return true;
@@ -698,19 +741,14 @@ chrome.runtime.onMessage.addListener((msg) => {
 });
 
 function isSafeToTrack(token, rugStatus) {
-  // Must have Twitter
   if (!token.twitter) return false;
-  // Must have at least 2 socials (twitter + telegram or website)
   const socials = [token.twitter, token.telegram, token.website].filter(Boolean).length;
   if (socials < 2) return false;
-  // Rug check must NOT be Danger
   if (rugStatus === "Danger") return false;
-  // Rug check must have actually returned a result (not unknown/error)
   if (rugStatus === "unknown" || rugStatus === "error") return false;
-  // On-chain red flags
-  if (token.topHolders !== null && token.topHolders > 25) return false;
-  if (token.insiderPct !== null && token.insiderPct > 10) return false;
-  if (token.bundlePct !== null && token.bundlePct > 20) return false;
+  if (token.topHolders !== null && token.topHolders > cfg.maxTopHolders) return false;
+  if (token.insiderPct !== null && token.insiderPct > cfg.maxInsiders) return false;
+  if (token.bundlePct !== null && token.bundlePct > cfg.maxBundle) return false;
   return true;
 }
 
@@ -890,14 +928,36 @@ function fmtUsd(v) {
 
 // ── Init ────────────────────────────────────────────────────
 
+const DEFAULTS = {
+  apiKey: "", scanInterval: 3, snapshotInterval: 5,
+  maxTopHolders: 25, maxInsiders: 10, maxBundle: 20,
+  maxTrackAge: 7, maxTracked: 200,
+};
+let cfg = { ...DEFAULTS };
+
 function init() {
   buildSidebar();
   setStatus(`Ready — scanning ${SITE} in 2s`, "waiting");
 
-  chrome.storage.local.get({ apiKey: "", scanInterval: 3 }, (data) => {
+  chrome.storage.local.get(DEFAULTS, (data) => {
+    cfg = data;
+
+    // Populate all settings fields
     document.getElementById("cs-key").value = data.apiKey || "";
-    document.getElementById("cs-iv").value = data.scanInterval || 3;
-    document.getElementById("cs-iv-label").textContent = data.scanInterval || 3;
+    document.getElementById("cs-iv").value = data.scanInterval;
+    document.getElementById("cs-iv-label").textContent = data.scanInterval;
+    document.getElementById("cs-snap").value = data.snapshotInterval;
+    document.getElementById("cs-snap-label").textContent = data.snapshotInterval;
+    document.getElementById("cs-th").value = data.maxTopHolders;
+    document.getElementById("cs-th-label").textContent = data.maxTopHolders;
+    document.getElementById("cs-ins").value = data.maxInsiders;
+    document.getElementById("cs-ins-label").textContent = data.maxInsiders;
+    document.getElementById("cs-bnd").value = data.maxBundle;
+    document.getElementById("cs-bnd-label").textContent = data.maxBundle;
+    document.getElementById("cs-age").value = data.maxTrackAge;
+    document.getElementById("cs-age-label").textContent = data.maxTrackAge;
+    document.getElementById("cs-max").value = data.maxTracked;
+    document.getElementById("cs-max-label").textContent = data.maxTracked;
 
     setTimeout(() => { setStatus(`Scanning ${SITE}…`, "active"); scanPage(); }, 2000);
     setInterval(() => scanPage(), (data.scanInterval || 3) * 1000);
