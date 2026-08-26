@@ -10,6 +10,7 @@
     "https://api.dexscreener.com/*",
     "https://rugcheck.xyz/*",
     "https://api.rugcheck.xyz/*",
+    "https://app.bubblemaps.io/*",
     "https://x.com/*",
     "https://twitter.com/*",
     "https://api.anthropic.com/*"

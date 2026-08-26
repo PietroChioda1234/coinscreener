@@ -394,6 +394,7 @@ function passesFilter(token) {
     if (token.topHolders !== null && token.topHolders > 25) return false;   // top holders too concentrated
     if (token.insiderPct !== null && token.insiderPct > 10) return false;   // too many insiders
     if (token.bundlePct !== null && token.bundlePct > 20) return false;     // too many bundle buys
+    if (token.clusterPct !== null && token.clusterPct > 30) return false;   // connected wallet cluster too big
     return true;
   }
   return true;
@@ -687,16 +688,49 @@ chrome.runtime.onMessage.addListener((msg) => {
     updateRugBadge(msg.address, msg);
     if (filterLevel === "high") applyFilter();
 
-    // Auto-track: ONLY if token would pass SAFE filter (always check SAFE rules, not current view)
+    // Auto-track: ONLY if token would pass SAFE filter
     const token = found.get(msg.address);
     if (token && isSafeToTrack(token, msg.status)) {
       chrome.runtime.sendMessage({ type: "TRACK_TOKEN", token });
     }
   }
+  if (msg.type === "BUBBLES_RESULT") {
+    updateBubbles(msg.address, msg);
+    if (filterLevel === "high") applyFilter();
+  }
   if (msg.type === "TRACKED_DATA") {
     renderTracked(msg.tracked);
   }
 });
+
+function updateBubbles(address, result) {
+  const token = found.get(address);
+  if (!token) return;
+
+  // Store on token for filtering
+  token.clusterPct = result.clusterPct;
+  token.bubblesWarnings = result.warnings || [];
+
+  // Find the card and add bubble info
+  const card = document.querySelector(`.cs-card[data-address="${address}"]`);
+  if (!card) return;
+
+  const risksEl = card.querySelector(`#cs-risks-${address}`);
+  if (!risksEl) return;
+
+  let bubbleHtml = '';
+  if (result.clusterPct !== null) {
+    const color = result.clusterPct > 30 ? '#f87171' : result.clusterPct > 15 ? '#facc15' : '#4ade80';
+    bubbleHtml += `<span style="color:${color}">🫧 Cluster: ${result.clusterPct.toFixed(0)}%</span><br>`;
+  }
+  for (const w of (result.warnings || [])) {
+    bubbleHtml += `<span style="color:#f97316">🫧 ${esc(w)}</span><br>`;
+  }
+
+  if (bubbleHtml) {
+    risksEl.innerHTML = (risksEl.innerHTML || '') + bubbleHtml;
+  }
+}
 
 function isSafeToTrack(token, rugStatus) {
   // Must have Twitter
@@ -712,6 +746,7 @@ function isSafeToTrack(token, rugStatus) {
   if (token.topHolders !== null && token.topHolders > 25) return false;
   if (token.insiderPct !== null && token.insiderPct > 10) return false;
   if (token.bundlePct !== null && token.bundlePct > 20) return false;
+  if (token.clusterPct !== null && token.clusterPct > 30) return false;
   return true;
 }
 
