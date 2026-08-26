@@ -1,0 +1,68 @@
+/*
+ * overlay.css — styles for the AI score badges on DexScreener
+ *
+ * These badges overlay on top of DexScreener's existing UI.
+ * They need to be visible but not intrusive.
+ */
+
+.cs-badge {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  pointer-events: auto;
+}
+
+.cs-badge-score {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  transition: transform 0.1s;
+}
+
+.cs-badge-score:hover {
+  transform: scale(1.08);
+}
+
+/* Tooltip — shows on hover */
+.cs-badge-tooltip {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  background: #1a1a2e;
+  color: #e5e5e5;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  min-width: 200px;
+  max-width: 300px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  z-index: 10000;
+  pointer-events: none;
+}
+
+.cs-badge:hover .cs-badge-tooltip {
+  display: block;
+}
+
+.cs-badge-tooltip strong {
+  color: #fff;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+}

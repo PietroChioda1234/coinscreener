@@ -1,35 +1,35 @@
 # 🪙 Coin Screener
 
-A simple meme coin screener that finds early tokens and checks them for safety red flags.
+A Chrome extension that rides on top of DexScreener and uses AI to evaluate meme coins in real time.
 
-**What it does:**
-1. Pulls new/trending tokens from DexScreener (free API, no key needed)
-2. Filters by your criteria (market cap, liquidity, volume, chain, age)
-3. Scores each token for safety (liquidity ratio, trading activity, buy/sell balance)
-4. Ranks results and gives you quick links to do deeper checks (RugCheck, BubbleMaps)
+**How it works:**
+1. You browse DexScreener normally (new pairs, trending, whatever)
+2. The extension scrapes every token visible on the page
+3. For each token, it fetches the Twitter/X profile
+4. Claude (fast Sonnet call) evaluates: is the meme good? is it legit? any red flags?
+5. Scores appear as badges directly on DexScreener — hover for the AI's reasoning
 
-**What it does NOT do:**
-- This is a first-pass screener. It catches obvious red flags but **cannot detect** every scam.
-- Always manually verify on [RugCheck](https://rugcheck.xyz), [BubbleMaps](https://bubblemaps.io), and check the actual community before buying.
-- This is not financial advice. Meme coins are extremely high risk.
+**Why this approach:**
+- No delayed API — you see what DexScreener shows, as it shows it
+- AI adds the layer no screener has: "is this meme actually funny and shareable?"
+- You stay in your normal DexScreener workflow, zero context switching
 
 ---
 
-## Quick Start (Web App)
+## Quick Start
 
-**Just open `index.html` in your browser.** That's it — no server, no install, no build step.
+1. Clone this repo
+2. Go to `chrome://extensions` in Chrome
+3. Enable **Developer mode** (toggle top-right)
+4. Click **Load unpacked** → select the `extension/` folder
+5. Click the extension icon → paste your [Anthropic API key](https://console.anthropic.com)
+6. Open [DexScreener](https://dexscreener.com/new-pairs) — badges appear automatically
 
-1. Pick your chains (Solana, Base, Ethereum, BSC, Arbitrum)
-2. Set max market cap and min liquidity with the sliders
-3. Hit **Scan for Meme Coins**
-4. Click any row to see the safety breakdown + links to RugCheck / BubbleMaps
+## Also Included
 
-You can also deploy it to GitHub Pages or any static host.
+**`index.html`** — A standalone web app screener you can open directly in your browser (no install). Uses DexScreener's public API + safety scoring. Good for quick manual scans.
 
-## CLI Version (optional)
-
-There's also a Python CLI for scripting or automation:
-
+**`run.py`** — Python CLI version for scripting/automation:
 ```bash
 pip install -r requirements.txt
 python run.py --chain solana --top 10 --detail
@@ -64,16 +64,21 @@ The screener is step 1. Before buying, always:
 
 ```
 coinscreener/
-├── index.html          # ← Web app — just open in browser
-├── run.py              # CLI entry point (Python)
-├── config.yaml         # CLI filters and thresholds
-├── requirements.txt    # Python dependencies (CLI only)
-├── app/
-│   └── index.jsx       # React component (for embedding)
-└── screener/
-    ├── api.py          # DexScreener API client
-    ├── safety.py       # Safety scoring engine
-    └── scanner.py      # Main scan pipeline
+├── extension/              # ← Chrome extension (main thing)
+│   ├── manifest.json       # Extension config + permissions
+│   ├── background.js       # API calls (DexScreener, Twitter, Claude)
+│   ├── content.js          # Scrapes DexScreener DOM, overlays badges
+│   ├── overlay.css         # Badge styles
+│   ├── popup.html          # Settings panel
+│   └── popup.js            # Settings logic
+├── index.html              # Standalone web app (backup/manual use)
+├── run.py                  # Python CLI (scripting/automation)
+├── config.yaml             # CLI config
+├── requirements.txt        # Python deps
+└── screener/               # Python backend
+    ├── api.py
+    ├── safety.py
+    └── scanner.py
 ```
 
 ## Roadmap

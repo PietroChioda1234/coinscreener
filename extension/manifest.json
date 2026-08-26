@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Coin Screener",
+  "version": "0.1.0",
+  "description": "Scans DexScreener in real time — AI evaluates meme quality from Twitter/X profiles",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://dexscreener.com/*",
+    "https://api.dexscreener.com/*",
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "https://api.anthropic.com/*",
+    "https://nitter.net/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://dexscreener.com/*"],
+      "js": ["content.js"],
+      "css": ["overlay.css"]
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
