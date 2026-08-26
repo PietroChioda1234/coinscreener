@@ -392,7 +392,23 @@ function scanPage() {
 
   const newTokens = [];
   for (const t of tokens) {
+    // Skip if we already have this exact address
     if (found.has(t.address)) continue;
+
+    // Deduplicate: skip if same twitter handle + symbol already in feed
+    // (same project launching multiple contracts)
+    if (t.twitterHandle && t.symbol) {
+      const dupeKey = `${t.twitterHandle.toLowerCase()}_${t.symbol.toLowerCase()}`;
+      let isDupe = false;
+      for (const [, existing] of found) {
+        if (existing.twitterHandle && existing.symbol) {
+          const existingKey = `${existing.twitterHandle.toLowerCase()}_${existing.symbol.toLowerCase()}`;
+          if (existingKey === dupeKey) { isDupe = true; break; }
+        }
+      }
+      if (isDupe) continue;
+    }
+
     found.set(t.address, t);
     addToFeed(t);
     newTokens.push(t);
