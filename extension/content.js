@@ -9,8 +9,9 @@
  */
 
 const SITE = location.hostname.includes("gmgn") ? "gmgn" : "dexscreener";
-const found = new Map(); // address -> card data
+const found = new Map(); // address -> token data with socials
 let scanCount = 0;
+let filterLevel = "easy"; // easy | medium | high
 
 // ── CSS ─────────────────────────────────────────────────────
 
@@ -124,6 +125,28 @@ const CSS = `
   font-size: 18px; cursor: pointer; color: #fff;
 }
 #cs-tab:hover { background: #1e1e2e; }
+#cs-filters {
+  display: flex; gap: 4px; padding: 8px 14px;
+  border-bottom: 1px solid #1e1e2e; flex-shrink: 0;
+}
+.cs-filter-btn {
+  flex: 1; padding: 6px 0; border-radius: 6px; border: 1px solid #1e1e2e;
+  background: transparent; color: #888; font-size: 11px; font-weight: 700;
+  cursor: pointer; text-align: center; transition: all .15s;
+}
+.cs-filter-btn:hover { border-color: #333; color: #ccc; }
+.cs-filter-btn.active-easy { background: #22c55e22; border-color: #22c55e55; color: #4ade80; }
+.cs-filter-btn.active-medium { background: #eab30822; border-color: #eab30855; color: #facc15; }
+.cs-filter-btn.active-high { background: #ef444422; border-color: #ef444455; color: #f87171; }
+.cs-card-socials {
+  display: flex; gap: 4px; margin-top: 4px;
+}
+.cs-social-tag {
+  font-size: 10px; padding: 1px 5px; border-radius: 3px;
+  background: #1e1e2e; color: #888;
+}
+.cs-social-tag.has { color: #4ade80; background: #22c55e18; }
+.cs-hidden { display: none !important; }
 `;
 
 
@@ -155,6 +178,11 @@ function buildSidebar() {
           <button id="cs-save">Save</button>
           <span id="cs-saved"></span>
         </div>
+      </div>
+      <div id="cs-filters">
+        <button class="cs-filter-btn active-easy" data-level="easy">🟢 ALL</button>
+        <button class="cs-filter-btn" data-level="medium">🟡 HAS 𝕏</button>
+        <button class="cs-filter-btn" data-level="high">🔴 SAFE</button>
       </div>
       <div id="cs-feed"></div>
       <div id="cs-status">
@@ -214,6 +242,18 @@ function buildSidebar() {
   // Push page content
   document.body.style.marginRight = "320px";
   document.body.style.transition = "margin-right .2s";
+
+  // Filter buttons
+  document.querySelectorAll('.cs-filter-btn').forEach(btn => {
+    btn.onclick = () => {
+      filterLevel = btn.dataset.level;
+      // Update active state
+      document.querySelectorAll('.cs-filter-btn').forEach(b => {
+        b.className = "cs-filter-btn" + (b.dataset.level === filterLevel ? ` active-${filterLevel}` : "");
+      });
+      applyFilter();
+    };
+  });
 }
 
 
@@ -240,42 +280,98 @@ function addToFeed(token) {
   if (token.pumpUrl) {
     link = token.pumpUrl;
   } else if (SITE === "gmgn") {
-    // GMGN main page uses ?chain=sol, token pages might use /sol/token/
     const cMap = { solana:"sol", ethereum:"eth", base:"base", bsc:"bsc" };
     link = `https://gmgn.ai/${cMap[chain] || "sol"}/token/${token.address}`;
   } else {
     link = `https://dexscreener.com/${chain}/${token.address}`;
   }
 
+  const hasT = !!token.twitter;
+  const hasTg = !!token.telegram;
+  const hasW = !!token.website;
+  const socialCount = [hasT, hasTg, hasW].filter(Boolean).length;
+
   const card = document.createElement("div");
   card.className = "cs-card cs-new";
   card.id = `cs-token-${token.address}`;
+  card.dataset.address = token.address;
 
   card.innerHTML = `
     <div class="cs-card-top">
       <span class="cs-card-sym">${esc(token.symbol)}</span>
       <span class="cs-card-chain">${chainShort}</span>
-      ${token.twitterUrl ? `<span class="cs-card-twitter">𝕏</span>` : ''}
       <span class="cs-card-score" id="cs-score-${token.address}" style="display:none"></span>
     </div>
     <div class="cs-card-name">${esc(token.name)}</div>
+    <div class="cs-card-socials">
+      <span class="cs-social-tag ${hasT ? 'has' : ''}">𝕏 ${hasT ? '✓' : '✗'}</span>
+      <span class="cs-social-tag ${hasTg ? 'has' : ''}">TG ${hasTg ? '✓' : '✗'}</span>
+      <span class="cs-social-tag ${hasW ? 'has' : ''}">Web ${hasW ? '✓' : '✗'}</span>
+    </div>
     <div class="cs-card-reason" id="cs-reason-${token.address}"></div>
     <div class="cs-card-links">
       <a class="cs-card-link" href="${link}" target="_blank">Open →</a>
-      ${token.twitterUrl ? `<a class="cs-card-link" href="${esc(token.twitterUrl)}" target="_blank">Twitter →</a>` : ''}
+      ${hasT ? `<a class="cs-card-link" href="${esc(token.twitter)}" target="_blank">Twitter →</a>` : ''}
+      ${hasTg ? `<a class="cs-card-link" href="${esc(token.telegram)}" target="_blank">Telegram →</a>` : ''}
+      ${hasW ? `<a class="cs-card-link" href="${esc(token.website)}" target="_blank">Website →</a>` : ''}
       <a class="cs-card-link" href="https://rugcheck.xyz/tokens/${token.address}" target="_blank" style="color:#eab308">RugCheck →</a>
     </div>
   `;
 
-  // Newest at top
   feed.prepend(card);
-
-  // Remove highlight after a moment
   setTimeout(() => { card.classList.remove("cs-new"); }, 2000);
 
-  // Update count
+  // Apply current filter to this card
+  if (!passesFilter(token)) card.classList.add("cs-hidden");
+
+  updateCount();
+}
+
+function passesFilter(token) {
+  const hasT = !!token.twitter;
+  const hasTg = !!token.telegram;
+  const hasW = !!token.website;
+  const socialCount = [hasT, hasTg, hasW].filter(Boolean).length;
+
+  if (filterLevel === "easy") return true;
+
+  if (filterLevel === "medium") {
+    // Must have Twitter
+    return hasT;
+  }
+
+  if (filterLevel === "high") {
+    // Must have Twitter + at least one more (Telegram or Website)
+    return hasT && socialCount >= 2;
+  }
+
+  return true;
+}
+
+function applyFilter() {
+  const feed = document.getElementById("cs-feed");
+  if (!feed) return;
+
+  for (const card of feed.querySelectorAll('.cs-card')) {
+    const addr = card.dataset.address;
+    const token = found.get(addr);
+    if (!token) continue;
+    if (passesFilter(token)) {
+      card.classList.remove("cs-hidden");
+    } else {
+      card.classList.add("cs-hidden");
+    }
+  }
+
+  updateCount();
+}
+
+function updateCount() {
+  const feed = document.getElementById("cs-feed");
   const countEl = document.getElementById("cs-count");
-  if (countEl) countEl.textContent = found.size;
+  if (!feed || !countEl) return;
+  const visible = feed.querySelectorAll('.cs-card:not(.cs-hidden)').length;
+  countEl.textContent = `${visible}/${found.size}`;
 }
 
 function updateCardWithScore(address, result) {
@@ -341,8 +437,8 @@ function scrapeGMGN() {
     seen.add(m[1]);
     const row = findRow(link);
     const { name, symbol } = extractInfo(row || link);
-    const twitterUrl = findTwitter(row || link);
-    tokens.push({ chain: "solana", address: m[1], name, symbol, twitterUrl, pumpUrl: link.getAttribute("href") });
+    const socials = findSocials(link);
+    tokens.push({ chain: "solana", address: m[1], name, symbol, ...socials, pumpUrl: link.getAttribute("href") });
   });
 
   // Also check for any internal GMGN token links: /sol/token/ADDR etc.
@@ -352,9 +448,9 @@ function scrapeGMGN() {
     seen.add(m[2]);
     const row = findRow(link);
     const { name, symbol } = extractInfo(row || link);
-    const twitterUrl = findTwitter(row || link);
+    const socials = findSocials(link);
     const chain = { sol:"solana", bsc:"bsc", eth:"ethereum", base:"base", tron:"tron", monad:"monad" }[m[1]] || m[1];
-    tokens.push({ chain, address: m[2], name, symbol, twitterUrl });
+    tokens.push({ chain, address: m[2], name, symbol, ...socials });
   });
 
   // Also catch Raydium / letsbonk / other launchpad links
@@ -365,8 +461,8 @@ function scrapeGMGN() {
     seen.add(m[1]);
     const row = findRow(link);
     const { name, symbol } = extractInfo(row || link);
-    const twitterUrl = findTwitter(row || link);
-    tokens.push({ chain: "solana", address: m[1], name, symbol, twitterUrl });
+    const socials = findSocials(link);
+    tokens.push({ chain: "solana", address: m[1], name, symbol, ...socials });
   });
 
   return tokens;
@@ -409,14 +505,34 @@ function extractInfo(el) {
   return { name, symbol: symMatch ? symMatch[1] : "?" };
 }
 
-function findTwitter(el) {
-  if (!el) return null;
-  const c = el.closest('tr, div, [class*="row"], [class*="Row"]') || el;
-  for (const a of c.querySelectorAll('a[href*="x.com"], a[href*="twitter.com"]')) {
-    const h = a.getAttribute("href");
-    if (h && (h.includes("x.com/") || h.includes("twitter.com/"))) return h;
+function findSocials(el) {
+  if (!el) return { twitter: null, telegram: null, website: null };
+  const socials = { twitter: null, telegram: null, website: null };
+
+  // Walk up to find a good container
+  const container = findRow(el) || el;
+  const links = container.querySelectorAll('a[href]');
+
+  for (const a of links) {
+    const h = a.getAttribute("href") || "";
+    if (!socials.twitter && (h.includes("x.com/") || h.includes("twitter.com/"))) {
+      // Skip status/tweet links — we want profile links
+      if (!h.match(/\/status\//)) socials.twitter = h;
+      else if (!socials.twitter) socials.twitter = h; // better than nothing
+    }
+    if (!socials.telegram && (h.includes("t.me/") || h.includes("telegram.me/"))) {
+      socials.telegram = h;
+    }
+    if (!socials.website && h.startsWith("http") &&
+        !h.includes("pump.fun") && !h.includes("gmgn.ai") && !h.includes("x.com") &&
+        !h.includes("twitter.com") && !h.includes("t.me") && !h.includes("telegram.") &&
+        !h.includes("lens.google") && !h.includes("dexscreener") &&
+        !h.includes("raydium") && !h.includes("letsbonk")) {
+      socials.website = h;
+    }
   }
-  return null;
+
+  return socials;
 }
 
 
