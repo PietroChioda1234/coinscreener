@@ -771,15 +771,31 @@ function renderTracked(tracked) {
       border:1px solid #dc262644; background:#dc262618; color:#f87171;
       font-size:12px; font-weight:600; cursor:pointer;
     ">🗑 Clear all tracked data</button>
+    <button id="cs-clear-everything" style="
+      width:100%; margin-top:6px; padding:10px; border-radius:8px;
+      border:1px solid #55555544; background:#55555518; color:#888;
+      font-size:11px; font-weight:600; cursor:pointer;
+    ">🧹 Clear everything (feed + tracked)</button>
   `;
 
   document.getElementById("cs-clear-tracked").onclick = () => {
-    if (confirm("Remove all tracked tokens and price history? This cannot be undone.")) {
-      chrome.storage.local.set({ tracked: [] }, () => {
-        renderTracked([]);
-        setStatus("Tracking cleared", "waiting");
-      });
-    }
+    chrome.storage.local.remove("tracked", () => {
+      renderTracked([]);
+      setStatus("Tracked data cleared", "waiting");
+    });
+  };
+
+  document.getElementById("cs-clear-everything").onclick = () => {
+    // Clear tracked storage
+    chrome.storage.local.remove("tracked");
+    // Clear sidebar feed
+    found.clear();
+    const feed = document.getElementById("cs-feed");
+    if (feed) feed.innerHTML = "";
+    // Clear tracked view
+    renderTracked([]);
+    updateCount();
+    setStatus("Everything cleared — start fresh", "waiting");
   };
 
   setStatus(`${tracked.length} tracked · ${wins} up · ${peaked} pumped&dumped · ${totalWithData - wins - peaked} other`, "active");
