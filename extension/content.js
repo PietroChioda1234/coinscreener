@@ -643,9 +643,9 @@ chrome.runtime.onMessage.addListener((msg) => {
     updateRugBadge(msg.address, msg);
     if (filterLevel === "high") applyFilter();
 
-    // Auto-track: if token passes SAFE filter and rug is not Danger, save it
+    // Auto-track: ONLY if token would pass SAFE filter (always check SAFE rules, not current view)
     const token = found.get(msg.address);
-    if (token && msg.status !== "Danger" && passesFilter(token)) {
+    if (token && isSafeToTrack(token, msg.status)) {
       chrome.runtime.sendMessage({ type: "TRACK_TOKEN", token });
     }
   }
@@ -653,6 +653,19 @@ chrome.runtime.onMessage.addListener((msg) => {
     renderTracked(msg.tracked);
   }
 });
+
+function isSafeToTrack(token, rugStatus) {
+  // Must have Twitter
+  if (!token.twitter) return false;
+  // Must have at least 2 socials (twitter + telegram or website)
+  const socials = [token.twitter, token.telegram, token.website].filter(Boolean).length;
+  if (socials < 2) return false;
+  // Rug check must NOT be Danger
+  if (rugStatus === "Danger") return false;
+  // Rug check must have actually returned a result (not unknown/error)
+  if (rugStatus === "unknown" || rugStatus === "error") return false;
+  return true;
+}
 
 function renderTracked(tracked) {
   const container = document.getElementById("cs-tracked");
