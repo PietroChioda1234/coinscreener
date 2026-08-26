@@ -1,0 +1,47 @@
+# ── Coin Screener Config ──────────────────────────────────────
+# Tweak these to change what the screener looks for.
+# All dollar values are in USD.
+
+# Which chains to scan (dexscreener chain IDs)
+# Common: solana, ethereum, base, bsc, arbitrum
+chains:
+  - solana
+  - base
+  - ethereum
+
+# Market cap filters (USD)
+# "Early" means low market cap — set your comfort range
+market_cap:
+  min: 10000        # ignore dust / dead tokens
+  max: 5000000      # 5M cap — still early
+
+# Liquidity filters (USD)
+liquidity:
+  min: 5000         # below this = too risky, can't exit
+  max: 1000000      # above this = probably already discovered
+
+# Volume filters (24h, USD)
+volume_24h:
+  min: 1000         # needs SOME activity
+  max: 10000000     # no ceiling really, but keeps it focused
+
+# Age filter — how old the pair can be (hours)
+pair_age:
+  min_hours: 1      # skip tokens that are seconds old (bot traps)
+  max_hours: 168    # 7 days — after that it's not "early" anymore
+
+# Safety thresholds
+safety:
+  # Liquidity-to-market-cap ratio — higher = safer
+  # 0.1 means at least 10% of mcap is backed by liquidity
+  min_liquidity_ratio: 0.05
+
+  # Buy/sell transaction ratio — too skewed = suspicious
+  # 0.3 means sells should be at least 30% of buys
+  min_buy_sell_ratio: 0.2
+
+  # Minimum number of transactions (24h) — filters out dead tokens
+  min_txns_24h: 50
+
+# How many results to show
+results_limit: 20
