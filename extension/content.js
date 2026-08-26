@@ -136,6 +136,25 @@ const CSS = `
   display: flex; align-items: center; justify-content: center;
   font-size: 18px; cursor: pointer; color: #fff;
 }
+.cs-fbtn.on-tracked { background: #3b82f618; border-color: #3b82f644; color: #60a5fa; }
+#cs-tracked {
+  flex: 1; overflow-y: auto; padding: 6px;
+  scrollbar-width: thin; scrollbar-color: #333 transparent;
+}
+.cs-tracked-card {
+  padding: 10px 12px; border-radius: 8px; margin-bottom: 4px;
+  border: 1px solid #1e1e2e;
+}
+.cs-tracked-top { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.cs-tracked-sym { font-weight: 800; font-size: 14px; color: #fff; }
+.cs-tracked-time { font-size: 10px; color: #555; margin-left: auto; }
+.cs-tracked-prices { display: flex; gap: 12px; font-size: 12px; margin-top: 4px; }
+.cs-tracked-prices span { color: #888; }
+.cs-tracked-pnl {
+  font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 14px;
+  margin-top: 4px;
+}
+.cs-tracked-empty { padding: 30px 20px; text-align: center; color: #555; font-size: 12px; line-height: 1.6; }
 #cs-tab:hover { background: #1e1e2e; }
 `;
 
@@ -172,8 +191,10 @@ function buildSidebar() {
         <button class="cs-fbtn on-easy" data-level="easy">🟢 ALL</button>
         <button class="cs-fbtn" data-level="medium">🟡 HAS 𝕏</button>
         <button class="cs-fbtn" data-level="high">🔴 SAFE</button>
+        <button class="cs-fbtn" data-level="tracked">📊 TRACKED</button>
       </div>
       <div id="cs-feed"></div>
+      <div id="cs-tracked" style="display:none"></div>
       <div id="cs-status">
         <span id="cs-dot" class="waiting"></span>
         <span id="cs-status-text">Starting…</span>
@@ -236,7 +257,22 @@ function buildSidebar() {
       document.querySelectorAll('.cs-fbtn').forEach(b => {
         b.className = "cs-fbtn" + (b.dataset.level === filterLevel ? ` on-${filterLevel}` : "");
       });
-      applyFilter();
+
+      const feed = document.getElementById("cs-feed");
+      const tracked = document.getElementById("cs-tracked");
+
+      if (filterLevel === "tracked") {
+        // Show tracked view, hide feed
+        if (feed) feed.style.display = "none";
+        if (tracked) tracked.style.display = "block";
+        chrome.runtime.sendMessage({ type: "GET_TRACKED" });
+        setStatus("Loading tracked prices…", "waiting");
+      } else {
+        // Show feed, hide tracked
+        if (feed) feed.style.display = "block";
+        if (tracked) tracked.style.display = "none";
+        applyFilter();
+      }
     };
   });
 
@@ -592,10 +628,98 @@ function extractInfo(el) {
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "RUG_RESULT") {
     updateRugBadge(msg.address, msg);
-    // Re-apply filter — a Danger result should hide the card in SAFE mode
     if (filterLevel === "high") applyFilter();
+
+    // Auto-track: if token passes SAFE filter and rug is not Danger, save it
+    const token = found.get(msg.address);
+    if (token && msg.status !== "Danger" && passesFilter(token)) {
+      chrome.runtime.sendMessage({ type: "TRACK_TOKEN", token });
+    }
+  }
+  if (msg.type === "TRACKED_DATA") {
+    renderTracked(msg.tracked);
   }
 });
+
+function renderTracked(tracked) {
+  const container = document.getElementById("cs-tracked");
+  if (!container) return;
+
+  if (!tracked || !tracked.length) {
+    container.innerHTML = `<div class="cs-tracked-empty">
+      No tokens tracked yet.<br>
+      Tokens that pass the 🔴 SAFE filter get tracked automatically with price snapshots.
+    </div>`;
+    setStatus("No tracked tokens", "waiting");
+    return;
+  }
+
+  // Sort by most recent first
+  tracked.sort((a, b) => b.trackedAt - a.trackedAt);
+
+  let html = '';
+  for (const t of tracked) {
+    const age = formatAge(Date.now() - t.trackedAt);
+    const initPrice = t.initialPrice || 0;
+    const curPrice = t.currentPrice || 0;
+    const pnl = initPrice > 0 && curPrice > 0 ? ((curPrice - initPrice) / initPrice) * 100 : null;
+    const pnlColor = pnl === null ? "#555" : pnl >= 0 ? "#4ade80" : "#f87171";
+    const pnlText = pnl === null ? "—" : (pnl >= 0 ? "+" : "") + pnl.toFixed(1) + "%";
+
+    const initMcap = t.initialMcap || 0;
+    const curMcap = t.currentMcap || 0;
+
+    html += `
+      <div class="cs-tracked-card">
+        <div class="cs-tracked-top">
+          <span class="cs-tracked-sym">${esc(t.symbol)}</span>
+          <span style="font-size:11px;color:#888">${esc(t.twitterHandle ? '@' + t.twitterHandle : '')}</span>
+          <span class="cs-tracked-time">${age} ago</span>
+        </div>
+        <div class="cs-tracked-pnl" style="color:${pnlColor}">${pnlText}</div>
+        <div class="cs-tracked-prices">
+          <span>Entry: ${fmtPrice(initPrice)}</span>
+          <span>Now: ${fmtPrice(curPrice)}</span>
+        </div>
+        <div class="cs-tracked-prices">
+          <span>MCap in: ${fmtUsd(initMcap)}</span>
+          <span>MCap now: ${fmtUsd(curMcap)}</span>
+        </div>
+      </div>
+    `;
+  }
+
+  container.innerHTML = html;
+
+  const wins = tracked.filter(t => t.currentPrice > t.initialPrice && t.initialPrice > 0).length;
+  const total = tracked.filter(t => t.initialPrice > 0 && t.currentPrice > 0).length;
+  setStatus(`${tracked.length} tracked · ${wins}/${total} up`, "active");
+}
+
+function formatAge(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return s + "s";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m";
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + "h";
+  return Math.floor(h / 24) + "d";
+}
+
+function fmtPrice(v) {
+  if (!v) return "—";
+  if (v >= 1) return "$" + v.toFixed(2);
+  if (v >= 0.001) return "$" + v.toFixed(4);
+  if (v >= 0.0000001) return "$" + v.toFixed(8);
+  return "$" + v.toExponential(2);
+}
+
+function fmtUsd(v) {
+  if (!v) return "—";
+  if (v >= 1e6) return "$" + (v/1e6).toFixed(1) + "M";
+  if (v >= 1e3) return "$" + (v/1e3).toFixed(1) + "K";
+  return "$" + v.toFixed(0);
+}
 
 
 // ── Init ────────────────────────────────────────────────────

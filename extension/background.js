@@ -13,6 +13,12 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
   if (msg.type === "CHECK_TOKENS") {
     checkTokens(msg.tokens, sender.tab?.id);
   }
+  if (msg.type === "TRACK_TOKEN") {
+    trackToken(msg.token);
+  }
+  if (msg.type === "GET_TRACKED") {
+    refreshTracked(sender.tab?.id);
+  }
 });
 
 async function checkTokens(tokens, tabId) {
@@ -164,5 +170,91 @@ function send(tabId, address, result) {
     type: "RUG_RESULT", address,
     status: result.status,
     risks: result.risks || [],
+  });
+}
+
+
+// ── Token tracking + price snapshots ────────────────────────
+
+async function fetchPrice(chain, address) {
+  const chainMap = { solana: "solana", bsc: "bsc", ethereum: "ethereum", base: "base" };
+  const c = chainMap[chain];
+  if (!c) return null;
+
+  try {
+    const r = await fetch(`https://api.dexscreener.com/tokens/v1/${c}/${address}`);
+    if (!r.ok) return null;
+    const data = await r.json();
+    if (!Array.isArray(data) || !data[0]) return null;
+
+    const pair = data[0];
+    return {
+      priceUsd: parseFloat(pair.priceUsd) || 0,
+      marketCap: pair.marketCap || pair.fdv || 0,
+      volume24h: pair.volume?.h24 || 0,
+      liquidity: pair.liquidity?.usd || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function trackToken(token) {
+  // Fetch initial price
+  const price = await fetchPrice(token.chain, token.address);
+
+  const entry = {
+    address: token.address,
+    chain: token.chain,
+    symbol: token.symbol,
+    name: token.name,
+    twitterHandle: token.twitterHandle || null,
+    rugStatus: token.rugStatus || "unknown",
+    trackedAt: Date.now(),
+    initialPrice: price?.priceUsd || 0,
+    initialMcap: price?.marketCap || 0,
+    initialLiquidity: price?.liquidity || 0,
+    snapshots: [],
+  };
+
+  // Save to storage
+  chrome.storage.local.get({ tracked: [] }, (data) => {
+    const tracked = data.tracked;
+    // Don't track duplicates
+    if (tracked.find(t => t.address === token.address)) return;
+    tracked.push(entry);
+    // Keep max 200 tracked tokens
+    if (tracked.length > 200) tracked.shift();
+    chrome.storage.local.set({ tracked });
+  });
+}
+
+async function refreshTracked(tabId) {
+  chrome.storage.local.get({ tracked: [] }, async (data) => {
+    const tracked = data.tracked;
+    if (!tracked.length) {
+      if (tabId) chrome.tabs.sendMessage(tabId, { type: "TRACKED_DATA", tracked: [] });
+      return;
+    }
+
+    // Fetch current prices for all tracked tokens (batch, throttled)
+    for (const entry of tracked) {
+      const price = await fetchPrice(entry.chain, entry.address);
+      if (price) {
+        entry.snapshots.push({
+          time: Date.now(),
+          priceUsd: price.priceUsd,
+          marketCap: price.marketCap,
+        });
+        // Keep max 50 snapshots per token
+        if (entry.snapshots.length > 50) entry.snapshots.shift();
+        entry.currentPrice = price.priceUsd;
+        entry.currentMcap = price.marketCap;
+      }
+      await new Promise(r => setTimeout(r, 400));
+    }
+
+    chrome.storage.local.set({ tracked });
+    if (tabId) chrome.tabs.sendMessage(tabId, { type: "TRACKED_DATA", tracked });
   });
 }
