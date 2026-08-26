@@ -274,8 +274,13 @@ function parseBubblesPage(html) {
 
 // ── Token tracking + price snapshots ────────────────────────
 
-// Auto-snapshot every 5 minutes
-chrome.alarms.create("price-snapshot", { periodInMinutes: 5 });
+// Auto-snapshot — only create alarm if it doesn't exist yet
+// (service worker restarts re-run this code, which would reset the timer)
+chrome.alarms.get("price-snapshot", (existing) => {
+  if (!existing) {
+    chrome.alarms.create("price-snapshot", { periodInMinutes: 5 });
+  }
+});
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "price-snapshot") {
     takeSnapshots();
@@ -420,9 +425,11 @@ async function takeSnapshots() {
         entry.currentMcap = price.marketCap;
         entry.lastChecked = now;
 
-        // Update initial price if we didn't have one before
-        if (!entry.initialPrice && price.priceUsd) {
+        // Backfill initial price if we only had mcap before
+        if (entry.initialPrice === 0 || entry.initialPrice === null || entry.initialPrice === undefined) {
           entry.initialPrice = price.priceUsd;
+        }
+        if (entry.initialMcap === 0 || entry.initialMcap === null || entry.initialMcap === undefined) {
           entry.initialMcap = price.marketCap;
         }
 
