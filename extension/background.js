@@ -176,6 +176,14 @@ function send(tabId, address, result) {
 
 // ── Token tracking + price snapshots ────────────────────────
 
+// Auto-snapshot every 5 minutes
+chrome.alarms.create("price-snapshot", { periodInMinutes: 5 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "price-snapshot") {
+    takeSnapshots();
+  }
+});
+
 async function fetchPrice(chain, address) {
   const chainMap = { solana: "solana", bsc: "bsc", ethereum: "ethereum", base: "base" };
   const c = chainMap[chain];
@@ -200,8 +208,8 @@ async function fetchPrice(chain, address) {
 }
 
 async function trackToken(token) {
-  // Fetch initial price
   const price = await fetchPrice(token.chain, token.address);
+  const now = Date.now();
 
   const entry = {
     address: token.address,
@@ -210,51 +218,72 @@ async function trackToken(token) {
     name: token.name,
     twitterHandle: token.twitterHandle || null,
     rugStatus: token.rugStatus || "unknown",
-    trackedAt: Date.now(),
+    trackedAt: now,
     initialPrice: price?.priceUsd || 0,
     initialMcap: price?.marketCap || 0,
-    initialLiquidity: price?.liquidity || 0,
-    snapshots: [],
+    // Peak tracking
+    peakPrice: price?.priceUsd || 0,
+    peakMcap: price?.marketCap || 0,
+    peakTime: now,
+    // Current
+    currentPrice: price?.priceUsd || 0,
+    currentMcap: price?.marketCap || 0,
+    lastChecked: now,
+    // Full history
+    snapshots: price ? [{ t: now, p: price.priceUsd, mc: price.marketCap }] : [],
   };
 
-  // Save to storage
   chrome.storage.local.get({ tracked: [] }, (data) => {
     const tracked = data.tracked;
-    // Don't track duplicates
     if (tracked.find(t => t.address === token.address)) return;
     tracked.push(entry);
-    // Keep max 200 tracked tokens
     if (tracked.length > 200) tracked.shift();
     chrome.storage.local.set({ tracked });
   });
 }
 
-async function refreshTracked(tabId) {
+async function takeSnapshots() {
   chrome.storage.local.get({ tracked: [] }, async (data) => {
     const tracked = data.tracked;
-    if (!tracked.length) {
-      if (tabId) chrome.tabs.sendMessage(tabId, { type: "TRACKED_DATA", tracked: [] });
-      return;
-    }
+    if (!tracked.length) return;
 
-    // Fetch current prices for all tracked tokens (batch, throttled)
+    const now = Date.now();
     for (const entry of tracked) {
+      // Skip tokens older than 7 days — stop tracking
+      if (now - entry.trackedAt > 7 * 24 * 60 * 60 * 1000) continue;
+
       const price = await fetchPrice(entry.chain, entry.address);
-      if (price) {
-        entry.snapshots.push({
-          time: Date.now(),
-          priceUsd: price.priceUsd,
-          marketCap: price.marketCap,
-        });
-        // Keep max 50 snapshots per token
-        if (entry.snapshots.length > 50) entry.snapshots.shift();
-        entry.currentPrice = price.priceUsd;
-        entry.currentMcap = price.marketCap;
+      if (!price || !price.priceUsd) continue;
+
+      // Update current
+      entry.currentPrice = price.priceUsd;
+      entry.currentMcap = price.marketCap;
+      entry.lastChecked = now;
+
+      // Update peak
+      if (price.priceUsd > (entry.peakPrice || 0)) {
+        entry.peakPrice = price.priceUsd;
+        entry.peakMcap = price.marketCap;
+        entry.peakTime = now;
       }
+
+      // Add snapshot
+      entry.snapshots.push({ t: now, p: price.priceUsd, mc: price.marketCap });
+      // Keep max 200 snapshots (~16 hours at 5min intervals)
+      if (entry.snapshots.length > 200) entry.snapshots.shift();
+
       await new Promise(r => setTimeout(r, 400));
     }
 
     chrome.storage.local.set({ tracked });
-    if (tabId) chrome.tabs.sendMessage(tabId, { type: "TRACKED_DATA", tracked });
+  });
+}
+
+async function refreshTracked(tabId) {
+  // First take fresh snapshots, then send to content
+  await takeSnapshots();
+
+  chrome.storage.local.get({ tracked: [] }, (data) => {
+    if (tabId) chrome.tabs.sendMessage(tabId, { type: "TRACKED_DATA", tracked: data.tracked });
   });
 }

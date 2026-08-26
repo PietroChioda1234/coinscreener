@@ -3,7 +3,7 @@
   "name": "Coin Screener",
   "version": "0.7.0",
   "description": "AI meme quality scanner — sidebar on GMGN and DexScreener",
-  "permissions": ["storage"],
+  "permissions": ["storage", "alarms"],
   "host_permissions": [
     "https://gmgn.ai/*",
     "https://dexscreener.com/*",

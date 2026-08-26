@@ -648,7 +648,7 @@ function renderTracked(tracked) {
   if (!tracked || !tracked.length) {
     container.innerHTML = `<div class="cs-tracked-empty">
       No tokens tracked yet.<br>
-      Tokens that pass the 🔴 SAFE filter get tracked automatically with price snapshots.
+      Tokens that pass the 🔴 SAFE filter get tracked automatically with price snapshots every 5 min.
     </div>`;
     setStatus("No tracked tokens", "waiting");
     return;
@@ -658,16 +658,35 @@ function renderTracked(tracked) {
   tracked.sort((a, b) => b.trackedAt - a.trackedAt);
 
   let html = '';
+  let wins = 0, peaked = 0, totalWithData = 0;
+
   for (const t of tracked) {
     const age = formatAge(Date.now() - t.trackedAt);
-    const initPrice = t.initialPrice || 0;
-    const curPrice = t.currentPrice || 0;
-    const pnl = initPrice > 0 && curPrice > 0 ? ((curPrice - initPrice) / initPrice) * 100 : null;
-    const pnlColor = pnl === null ? "#555" : pnl >= 0 ? "#4ade80" : "#f87171";
-    const pnlText = pnl === null ? "—" : (pnl >= 0 ? "+" : "") + pnl.toFixed(1) + "%";
+    const init = t.initialPrice || 0;
+    const peak = t.peakPrice || 0;
+    const cur = t.currentPrice || 0;
+    const hasData = init > 0 && cur > 0;
 
-    const initMcap = t.initialMcap || 0;
-    const curMcap = t.currentMcap || 0;
+    // Calculate percentages
+    const pnlNow = hasData ? ((cur - init) / init) * 100 : null;
+    const pnlPeak = init > 0 && peak > 0 ? ((peak - init) / init) * 100 : null;
+    const drawdown = peak > 0 && cur > 0 ? ((cur - peak) / peak) * 100 : null;
+    const timeToPeak = t.peakTime && t.trackedAt ? formatAge(t.peakTime - t.trackedAt) : "—";
+
+    // Trajectory label
+    let trajectory = "", trajColor = "#555";
+    if (hasData) {
+      totalWithData++;
+      if (pnlNow >= 5) { trajectory = "📈 Up"; trajColor = "#4ade80"; wins++; }
+      else if (pnlNow <= -5 && pnlPeak > 20) { trajectory = "🎢 Pumped & dumped"; trajColor = "#f97316"; peaked++; }
+      else if (pnlNow <= -5) { trajectory = "📉 Down"; trajColor = "#f87171"; }
+      else if (pnlPeak > 20 && drawdown < -10) { trajectory = "⚡ Peaked, pulling back"; trajColor = "#eab308"; peaked++; }
+      else { trajectory = "➡️ Flat"; trajColor = "#888"; }
+    }
+
+    const pnlColor = pnlNow === null ? "#555" : pnlNow >= 0 ? "#4ade80" : "#f87171";
+    const peakColor = pnlPeak === null ? "#555" : pnlPeak >= 0 ? "#4ade80" : "#f87171";
+    const snapCount = t.snapshots?.length || 0;
 
     html += `
       <div class="cs-tracked-card">
@@ -676,24 +695,26 @@ function renderTracked(tracked) {
           <span style="font-size:11px;color:#888">${esc(t.twitterHandle ? '@' + t.twitterHandle : '')}</span>
           <span class="cs-tracked-time">${age} ago</span>
         </div>
-        <div class="cs-tracked-pnl" style="color:${pnlColor}">${pnlText}</div>
+        <div style="font-size:12px;color:${trajColor};font-weight:600;margin:4px 0">${trajectory}</div>
         <div class="cs-tracked-prices">
-          <span>Entry: ${fmtPrice(initPrice)}</span>
-          <span>Now: ${fmtPrice(curPrice)}</span>
+          <span>Entry: ${fmtPrice(init)}</span>
+          <span>MCap: ${fmtUsd(t.initialMcap)}</span>
         </div>
         <div class="cs-tracked-prices">
-          <span>MCap in: ${fmtUsd(initMcap)}</span>
-          <span>MCap now: ${fmtUsd(curMcap)}</span>
+          <span style="color:${peakColor}">Peak: ${fmtPrice(peak)} ${pnlPeak !== null ? '(' + (pnlPeak >= 0 ? '+' : '') + pnlPeak.toFixed(0) + '%)' : ''}</span>
+          <span style="color:#888">at ${timeToPeak}</span>
         </div>
+        <div class="cs-tracked-prices">
+          <span style="color:${pnlColor}">Now: ${fmtPrice(cur)} ${pnlNow !== null ? '(' + (pnlNow >= 0 ? '+' : '') + pnlNow.toFixed(0) + '%)' : ''}</span>
+          <span style="color:#888">MCap: ${fmtUsd(t.currentMcap)}</span>
+        </div>
+        <div style="font-size:10px;color:#444;margin-top:4px">${snapCount} snapshots · last checked ${t.lastChecked ? formatAge(Date.now() - t.lastChecked) + ' ago' : '—'}</div>
       </div>
     `;
   }
 
   container.innerHTML = html;
-
-  const wins = tracked.filter(t => t.currentPrice > t.initialPrice && t.initialPrice > 0).length;
-  const total = tracked.filter(t => t.initialPrice > 0 && t.currentPrice > 0).length;
-  setStatus(`${tracked.length} tracked · ${wins}/${total} up`, "active");
+  setStatus(`${tracked.length} tracked · ${wins} up · ${peaked} pumped&dumped · ${totalWithData - wins - peaked} other`, "active");
 }
 
 function formatAge(ms) {
