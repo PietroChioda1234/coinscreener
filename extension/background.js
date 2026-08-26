@@ -31,22 +31,20 @@ async function checkTokens(tokens, tabId) {
     const cached = cache.get(addr);
     if (cached && Date.now() - cached.ts < CACHE_TTL) {
       sendRug(tabId, addr, cached);
-      if (cached.bubbles) sendBubbles(tabId, addr, cached.bubbles);
       continue;
     }
 
     pending.add(addr);
 
-    // Run RugCheck and BubbleMaps in parallel
-    Promise.all([
-      checkRugScore(addr).catch(() => ({ status: "error", risks: [] })),
-      checkBubbleMaps(token.chain || "solana", addr).catch(() => null),
-    ]).then(([rugResult, bubblesResult]) => {
-      const combined = { ...rugResult, bubbles: bubblesResult, ts: Date.now() };
-      cache.set(addr, combined);
-      sendRug(tabId, addr, rugResult);
-      if (bubblesResult) sendBubbles(tabId, addr, bubblesResult);
-    }).finally(() => pending.delete(addr));
+    checkRugScore(addr)
+      .then(result => {
+        cache.set(addr, { ...result, ts: Date.now() });
+        sendRug(tabId, addr, result);
+      })
+      .catch(() => {
+        sendRug(tabId, addr, { status: "error", risks: [] });
+      })
+      .finally(() => pending.delete(addr));
 
     await new Promise(r => setTimeout(r, 800));
   }
@@ -172,103 +170,6 @@ function sendRug(tabId, address, result) {
     status: result.status,
     risks: result.risks || [],
   });
-}
-
-function sendBubbles(tabId, address, result) {
-  chrome.tabs.sendMessage(tabId, {
-    type: "BUBBLES_RESULT", address, ...result,
-  });
-}
-
-
-// ── BubbleMaps HTML scraping ────────────────────────────────
-
-async function checkBubbleMaps(chain, address) {
-  const chainMap = { solana: "sol", ethereum: "eth", base: "base", bsc: "bsc" };
-  const c = chainMap[chain] || "sol";
-
-  try {
-    const r = await fetch(`https://app.bubblemaps.io/${c}/token/${address}`, {
-      headers: { "Accept": "text/html" }
-    });
-    if (!r.ok) return null;
-    const html = await r.text();
-    return parseBubblesPage(html);
-  } catch {
-    return null;
-  }
-}
-
-function parseBubblesPage(html) {
-  const result = {
-    clusterPct: null,    // % held by connected wallet clusters
-    topHolderPct: null,  // % held by top holders
-    clusterCount: null,  // number of clusters found
-    warnings: [],
-  };
-
-  const lower = html.toLowerCase();
-
-  // Look for cluster/concentration data in the page
-  // BubbleMaps often embeds data in JSON or script tags
-  
-  // Try to find __NEXT_DATA__ or similar embedded JSON
-  const nextDataMatch = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>([^<]+)<\/script>/i);
-  if (nextDataMatch) {
-    try {
-      const data = JSON.parse(nextDataMatch[1]);
-      const props = data?.props?.pageProps;
-      if (props) {
-        if (props.cluster_percentage != null) result.clusterPct = props.cluster_percentage;
-        if (props.top_holders_percentage != null) result.topHolderPct = props.top_holders_percentage;
-      }
-    } catch {}
-  }
-
-  // Try to find embedded state/data in script tags
-  const scriptMatches = html.matchAll(/<script[^>]*>([^<]{100,})<\/script>/gi);
-  for (const m of scriptMatches) {
-    const script = m[1];
-    
-    // Look for cluster percentage patterns
-    const clusterMatch = script.match(/cluster[_\s]*(?:percentage|pct|percent)["\s:]*([0-9.]+)/i);
-    if (clusterMatch && result.clusterPct === null) {
-      result.clusterPct = parseFloat(clusterMatch[1]);
-    }
-    
-    // Look for concentration patterns
-    const concMatch = script.match(/(?:concentration|top_holders?)["\s:]*([0-9.]+)\s*%?/i);
-    if (concMatch && result.topHolderPct === null) {
-      result.topHolderPct = parseFloat(concMatch[1]);
-    }
-
-    // Look for cluster count
-    const countMatch = script.match(/(?:clusters?|groups?)["\s:]*(\d+)/i);
-    if (countMatch && result.clusterCount === null) {
-      result.clusterCount = parseInt(countMatch[1]);
-    }
-  }
-
-  // Look for warning/risk text in the page
-  if (lower.includes("high concentration")) result.warnings.push("High concentration detected");
-  if (lower.includes("connected wallets") || lower.includes("linked wallets")) result.warnings.push("Connected wallet clusters found");
-  if (lower.includes("suspicious") || lower.includes("sybil")) result.warnings.push("Suspicious wallet pattern");
-  if (lower.match(/(\d+)%\s*(?:held|controlled)\s*by\s*(?:cluster|connected|linked)/i)) {
-    const pctMatch = lower.match(/(\d+)%\s*(?:held|controlled)\s*by\s*(?:cluster|connected|linked)/i);
-    if (pctMatch) result.clusterPct = parseFloat(pctMatch[1]);
-  }
-
-  // Meta description might have useful info
-  const descMatch = html.match(/meta\s+(?:name|property)="(?:og:)?description"\s+content="([^"]*)"/i);
-  if (descMatch) {
-    const desc = descMatch[1];
-    const pctInDesc = desc.match(/([0-9.]+)\s*%\s*(?:cluster|connected|concentration)/i);
-    if (pctInDesc && result.clusterPct === null) {
-      result.clusterPct = parseFloat(pctInDesc[1]);
-    }
-  }
-
-  return result;
 }
 
 
