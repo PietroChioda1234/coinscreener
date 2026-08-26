@@ -264,7 +264,10 @@ function addToFeed(token) {
 
   // Build "has" links
   let hasHtml = '';
-  if (hasT) hasHtml += `<a href="${esc(token.twitter)}" target="_blank">𝕏 Twitter</a>`;
+  if (hasT) {
+    const handle = token.twitterHandle ? `@${token.twitterHandle}` : "Twitter";
+    hasHtml += `<a href="${esc(token.twitter)}" target="_blank">𝕏 ${esc(handle)}</a>`;
+  }
   if (hasTg) hasHtml += `<a href="${esc(token.telegram)}" target="_blank">💬 Telegram</a>`;
   if (hasW) hasHtml += `<a href="${esc(token.website)}" target="_blank">🌐 Website</a>`;
 
@@ -402,7 +405,95 @@ function scanPage() {
 }
 
 function scrapeGMGN() {
-  // Get ALL links on the page in DOM order
+  const tokens = [];
+
+  // GMGN uses data-testid="trench-token-card" on each card
+  const cards = document.querySelectorAll('[data-testid="trench-token-card"]');
+
+  for (const card of cards) {
+    // 1. Get token address from the card's own href="/sol/token/ADDRESS"
+    const cardHref = card.getAttribute("href") || "";
+    const addrMatch = cardHref.match(/\/(sol|bsc|eth|base|tron|monad)\/token\/([A-Za-z0-9]{20,})/);
+    if (!addrMatch) continue;
+
+    const chainMap = { sol:"solana", bsc:"bsc", eth:"ethereum", base:"base", tron:"tron", monad:"monad" };
+    const chain = chainMap[addrMatch[1]] || addrMatch[1];
+    const address = addrMatch[2];
+
+    // Skip duplicates
+    if (tokens.find(t => t.address === address)) continue;
+
+    // 2. Get name/symbol from text inside the card
+    //    Symbol is in a <span> with font-medium text-[16px], name is in a div after it
+    let symbol = "?", name = "?";
+    const symEl = card.querySelector('[data-sentry-component="TokenBaseInfo"] span.font-medium');
+    if (symEl) symbol = symEl.textContent.trim();
+    const nameEl = card.querySelector('[data-sentry-component="TokenBaseInfo"] .text-text-300');
+    if (nameEl) name = nameEl.textContent.trim();
+
+    // Fallback: grab from text content
+    if (symbol === "?") {
+      const m = card.textContent.match(/\b([A-Z][A-Z0-9$]{1,9})\b/);
+      if (m) symbol = m[1];
+    }
+
+    // 3. Twitter — look for x.com links (INCLUDING /status/ links — that's what GMGN uses)
+    //    Also grab the @handle text if visible
+    let twitter = null;
+    let twitterHandle = null;
+    for (const a of card.querySelectorAll('a[href*="x.com/"], a[href*="twitter.com/"]')) {
+      const h = a.getAttribute("href") || "";
+      if (h.includes("x.com/") || h.includes("twitter.com/")) {
+        twitter = h;
+        // Extract handle: x.com/HANDLE or x.com/HANDLE/status/...
+        const handleMatch = h.match(/(?:x\.com|twitter\.com)\/([A-Za-z0-9_]+)/);
+        if (handleMatch) twitterHandle = handleMatch[1];
+        break;
+      }
+    }
+    // Also check for @handle text
+    if (!twitterHandle) {
+      const handleText = card.textContent.match(/@([A-Za-z0-9_]{2,20})/);
+      if (handleText) twitterHandle = handleText[1];
+    }
+
+    // 4. Telegram
+    let telegram = null;
+    const tgLink = card.querySelector('a[href*="t.me/"], a[href*="telegram.me/"]');
+    if (tgLink) telegram = tgLink.getAttribute("href");
+
+    // 5. Website — look for the website icon's parent link
+    let website = null;
+    const webIcon = card.querySelector('[data-icon="IconWebsite16pxRegular"]');
+    if (webIcon) {
+      const webLink = webIcon.closest('a[href]');
+      if (webLink) {
+        const wh = webLink.getAttribute("href") || "";
+        // Only count it as a website if it's NOT just another x.com link
+        if (wh.startsWith("http") && !wh.includes("x.com") && !wh.includes("twitter.com")) {
+          website = wh;
+        }
+      }
+    }
+
+    // 6. Pump.fun link
+    let pumpUrl = null;
+    const pumpLink = card.querySelector('a[href*="pump.fun/coin/"]');
+    if (pumpLink) pumpUrl = pumpLink.getAttribute("href");
+
+    tokens.push({ chain, address, name, symbol, twitter, twitterHandle, telegram, website, pumpUrl });
+  }
+
+  // Fallback: if no cards found with data-testid, try sequential link scanning
+  if (tokens.length === 0) {
+    return scrapeGMGNFallback();
+  }
+
+  return tokens;
+}
+
+function scrapeGMGNFallback() {
+  // Sequential scan as backup
   const allLinks = [...document.querySelectorAll('a[href]')];
   const tokens = [];
   let current = null;
@@ -410,57 +501,29 @@ function scrapeGMGN() {
   for (const link of allLinks) {
     const href = link.getAttribute("href") || "";
 
-    // Is this a token link (pump.fun)?
     const pumpMatch = href.match(/pump\.fun\/coin\/([A-Za-z0-9]{20,})/);
-    if (pumpMatch) {
-      // Save previous token if exists
-      if (current && !tokens.find(t => t.address === current.address)) {
-        tokens.push(current);
-      }
-      // Start new token
-      const addr = pumpMatch[1];
-      const { name, symbol } = extractInfo(link.parentElement?.parentElement || link);
-      current = { chain: "solana", address: addr, name, symbol, pumpUrl: href, twitter: null, telegram: null, website: null };
-      continue;
-    }
-
-    // Is this an internal GMGN token link?
     const gmgnMatch = href.match(/\/(sol|bsc|eth|base|tron|monad)\/token\/([A-Za-z0-9]{20,})/);
-    if (gmgnMatch) {
-      if (current && !tokens.find(t => t.address === current.address)) {
-        tokens.push(current);
-      }
-      const chain = { sol:"solana", bsc:"bsc", eth:"ethereum", base:"base" }[gmgnMatch[1]] || gmgnMatch[1];
-      const { name, symbol } = extractInfo(link.parentElement?.parentElement || link);
-      current = { chain, address: gmgnMatch[2], name, symbol, twitter: null, telegram: null, website: null };
+
+    if (pumpMatch || gmgnMatch) {
+      if (current && !tokens.find(t => t.address === current.address)) tokens.push(current);
+      const address = pumpMatch ? pumpMatch[1] : gmgnMatch[2];
+      const chain = pumpMatch ? "solana" : ({ sol:"solana", bsc:"bsc", eth:"ethereum", base:"base" }[gmgnMatch[1]] || gmgnMatch[1]);
+      current = { chain, address, name: "?", symbol: "?", twitter: null, telegram: null, website: null, pumpUrl: pumpMatch ? href : null };
       continue;
     }
 
-    // Not a token link — if we have a current token, check if this is a social link
     if (!current) continue;
-
-    if (!current.twitter && (href.includes("x.com/") || href.includes("twitter.com/")) && !href.includes("/status/")) {
-      current.twitter = href;
-    }
-    if (!current.telegram && (href.includes("t.me/") || href.includes("telegram.me/"))) {
-      current.telegram = href;
-    }
+    // Accept ALL x.com links including /status/ — that's what GMGN uses
+    if (!current.twitter && (href.includes("x.com/") || href.includes("twitter.com/"))) current.twitter = href;
+    if (!current.telegram && (href.includes("t.me/") || href.includes("telegram.me/"))) current.telegram = href;
     if (!current.website && href.startsWith("http") &&
-        !href.includes("pump.fun") && !href.includes("gmgn.ai") &&
-        !href.includes("x.com") && !href.includes("twitter.com") &&
-        !href.includes("t.me") && !href.includes("telegram.") &&
-        !href.includes("lens.google") && !href.includes("dexscreener") &&
-        !href.includes("raydium") && !href.includes("letsbonk") &&
-        !href.includes("nitter") && !href.includes("cnn.com")) {
+        !href.includes("pump.fun") && !href.includes("gmgn.ai") && !href.includes("x.com") &&
+        !href.includes("twitter.com") && !href.includes("t.me") && !href.includes("telegram.") &&
+        !href.includes("lens.google") && !href.includes("nitter")) {
       current.website = href;
     }
   }
-
-  // Don't forget the last token
-  if (current && !tokens.find(t => t.address === current.address)) {
-    tokens.push(current);
-  }
-
+  if (current && !tokens.find(t => t.address === current.address)) tokens.push(current);
   return tokens;
 }
 
