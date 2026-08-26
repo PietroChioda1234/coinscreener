@@ -1,33 +1,298 @@
 /*
- * content.js — runs on gmgn.ai AND dexscreener.com
+ * content.js — sidebar + scraper
  *
- * Detects which site we're on, scrapes token data from the DOM,
- * sends to background.js for AI evaluation,
- * overlays meme quality badges on the page.
+ * Injects a resizable sidebar into GMGN / DexScreener.
+ * Scrapes tokens from the page, sends to background for AI eval,
+ * streams results into the sidebar as a continuous feed.
  */
 
 const SITE = location.hostname.includes("gmgn") ? "gmgn" : "dexscreener";
-let scanTimer = null;
-const evaluated = new Map();  // address -> result
-const pendingAddresses = new Set();
+const evaluated = new Map();
+const pendingAddrs = new Set();
+let settings = { apiKey: "", enabled: true, scanInterval: 5 };
+let sidebarOpen = true;
 
-// ── Boot ────────────────────────────────────────────────────
+// ── Build sidebar ───────────────────────────────────────────
 
-init();
+function buildSidebar() {
+  // Don't double-inject
+  if (document.getElementById("cs-root")) return;
 
-async function init() {
-  const settings = await getSettings();
-  if (!settings.enabled || !settings.apiKey) {
-    console.log("[CoinScreener] Inactive — set API key in extension popup");
-    return;
+  const root = document.createElement("div");
+  root.id = "cs-root";
+  root.innerHTML = `
+    <style>${SIDEBAR_CSS}</style>
+    <div id="cs-sidebar">
+      <div id="cs-drag"></div>
+      <div id="cs-head">
+        <span id="cs-title">🪙 Screener</span>
+        <div id="cs-head-right">
+          <span id="cs-count">0</span>
+          <button id="cs-gear">⚙</button>
+          <button id="cs-collapse">◀</button>
+        </div>
+      </div>
+
+      <div id="cs-settings" style="display:none">
+        <label>API Key</label>
+        <input type="password" id="cs-key" placeholder="sk-ant-api03-..." spellcheck="false">
+        <label>Scan interval: <span id="cs-iv-label">5</span>s</label>
+        <input type="range" id="cs-iv" min="3" max="30" value="5">
+        <div id="cs-settings-actions">
+          <button id="cs-save">Save</button>
+          <span id="cs-saved"></span>
+        </div>
+      </div>
+
+      <div id="cs-feed"></div>
+
+      <div id="cs-empty">
+        Scanning ${SITE}…<br>
+        <span style="font-size:11px;color:#555">Results appear as tokens are found and evaluated</span>
+      </div>
+    </div>
+    <button id="cs-tab" style="display:none">🪙</button>
+  `;
+  document.body.appendChild(root);
+
+  // ── Wire up events ──────────────────────────────────────
+
+  // Settings toggle
+  const settingsEl = document.getElementById("cs-settings");
+  document.getElementById("cs-gear").onclick = () => {
+    settingsEl.style.display = settingsEl.style.display === "none" ? "block" : "none";
+  };
+
+  // Collapse / expand
+  const sidebar = document.getElementById("cs-sidebar");
+  const tab = document.getElementById("cs-tab");
+  document.getElementById("cs-collapse").onclick = () => {
+    sidebar.style.display = "none";
+    tab.style.display = "flex";
+    document.body.style.marginRight = "0";
+    sidebarOpen = false;
+  };
+  tab.onclick = () => {
+    sidebar.style.display = "flex";
+    tab.style.display = "none";
+    document.body.style.marginRight = sidebar.style.width || "320px";
+    sidebarOpen = true;
+  };
+
+  // Interval slider
+  const ivSlider = document.getElementById("cs-iv");
+  const ivLabel = document.getElementById("cs-iv-label");
+  ivSlider.oninput = () => { ivLabel.textContent = ivSlider.value; };
+
+  // Save
+  document.getElementById("cs-save").onclick = () => {
+    settings.apiKey = document.getElementById("cs-key").value.trim();
+    settings.scanInterval = parseInt(ivSlider.value) || 5;
+    chrome.storage.local.set(settings, () => {
+      const el = document.getElementById("cs-saved");
+      el.textContent = "✓ Saved";
+      setTimeout(() => { el.textContent = ""; }, 2000);
+    });
+  };
+
+  // Drag to resize
+  const drag = document.getElementById("cs-drag");
+  let dragging = false;
+  drag.onmousedown = (e) => { dragging = true; e.preventDefault(); };
+  document.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const w = Math.max(240, Math.min(600, window.innerWidth - e.clientX));
+    sidebar.style.width = w + "px";
+    document.body.style.marginRight = w + "px";
+  });
+  document.addEventListener("mouseup", () => { dragging = false; });
+
+  // Push page content to make room
+  document.body.style.marginRight = "320px";
+  document.body.style.transition = "margin-right .2s";
+}
+
+
+// ── Feed management ─────────────────────────────────────────
+
+function addToFeed(result) {
+  const feed = document.getElementById("cs-feed");
+  const empty = document.getElementById("cs-empty");
+  if (!feed) return;
+  if (empty) empty.style.display = "none";
+
+  // Don't show errors or very low scores cluttering the feed
+  if (result.score < 0) return;
+
+  // Build card
+  const card = document.createElement("div");
+  card.className = "cs-card";
+  card.dataset.score = result.score;
+
+  const emoji = { gem:"💎", interesting:"👀", meh:"😐", skip:"👎", scam:"🚩" }[result.verdict] || "❓";
+  const scoreColor = result.score >= 70 ? "#22c55e"
+    : result.score >= 50 ? "#eab308"
+    : result.score >= 30 ? "#f97316"
+    : "#ef4444";
+
+  const chain = result.chain || "?";
+  const chainShort = { solana:"SOL", ethereum:"ETH", base:"BASE", bsc:"BSC", tron:"TRON" }[chain] || chain.slice(0,4).toUpperCase();
+
+  // Build link to token page
+  let link = "#";
+  if (SITE === "gmgn") {
+    const cMap = { solana:"sol", ethereum:"eth", base:"base", bsc:"bsc" };
+    link = `https://gmgn.ai/${cMap[chain] || chain}/token/${result.address}`;
+  } else {
+    link = `https://dexscreener.com/${chain}/${result.address}`;
   }
 
-  const interval = (settings.scanInterval || 5) * 1000;
-  console.log(`[CoinScreener] Active on ${SITE} — scanning every ${interval/1000}s`);
+  card.innerHTML = `
+    <div class="cs-card-top">
+      <span class="cs-card-emoji">${emoji}</span>
+      <span class="cs-card-score" style="color:${scoreColor}">${result.score}</span>
+      <span class="cs-card-sym">${result.symbol || "?"}</span>
+      <span class="cs-card-chain">${chainShort}</span>
+    </div>
+    <div class="cs-card-name">${esc(result.name || "")}</div>
+    <div class="cs-card-reason">${esc(result.reason || "")}</div>
+    <a class="cs-card-link" href="${link}" target="_blank">Open on ${SITE === "gmgn" ? "GMGN" : "DexScreener"} →</a>
+  `;
 
-  // Wait for page to render (both sites are SPAs)
-  setTimeout(() => scanPage(), 3000);
-  scanTimer = setInterval(() => scanPage(), interval);
+  // Insert sorted — best scores at top
+  let inserted = false;
+  for (const existing of feed.children) {
+    if (parseInt(existing.dataset.score) < result.score) {
+      feed.insertBefore(card, existing);
+      inserted = true;
+      break;
+    }
+  }
+  if (!inserted) feed.appendChild(card);
+
+  // Update count
+  const countEl = document.getElementById("cs-count");
+  if (countEl) countEl.textContent = feed.children.length;
+
+  // Highlight briefly
+  card.style.background = "#1e293b";
+  setTimeout(() => { card.style.background = ""; }, 1500);
+}
+
+function esc(s) { const d = document.createElement("span"); d.textContent = s; return d.innerHTML; }
+
+
+// ── Scraping ────────────────────────────────────────────────
+
+function scanPage() {
+  const tokens = SITE === "gmgn" ? scrapeGMGN() : scrapeDexScreener();
+  const newTokens = tokens.filter(t => !evaluated.has(t.address) && !pendingAddrs.has(t.address));
+  if (newTokens.length > 0) {
+    newTokens.forEach(t => pendingAddrs.add(t.address));
+    chrome.runtime.sendMessage({ type: "EVALUATE_TOKENS", tokens: newTokens });
+  }
+}
+
+function scrapeGMGN() {
+  const tokens = [], seen = new Set();
+
+  // Token page links: /sol/token/ADDR, /bsc/token/ADDR, etc.
+  document.querySelectorAll('a[href*="/token/"]').forEach(link => {
+    const m = (link.getAttribute("href") || "").match(/\/(sol|bsc|eth|base|tron|monad)\/token\/([A-Za-z0-9]{20,})/);
+    if (!m || seen.has(m[2])) return;
+    seen.add(m[2]);
+    const row = findRow(link);
+    const { name, symbol } = extractInfo(row || link);
+    const twitterUrl = findTwitter(row || link);
+    const chain = { sol:"solana", bsc:"bsc", eth:"ethereum", base:"base", tron:"tron", monad:"monad" }[m[1]] || m[1];
+    tokens.push({ chain, address: m[2], name, symbol, twitterUrl, element: link });
+  });
+
+  // Raw Solana addresses
+  document.querySelectorAll('[class*="addr"], [class*="token"], [data-address], [class*="contract"]').forEach(el => {
+    const m = (el.textContent?.trim() || el.dataset?.address || "").match(/([1-9A-HJ-NP-Za-km-z]{32,44})/);
+    if (m && !seen.has(m[1])) {
+      seen.add(m[1]);
+      const row = findRow(el);
+      const { name, symbol } = extractInfo(row || el);
+      tokens.push({ chain: "solana", address: m[1], name, symbol, element: el });
+    }
+  });
+
+  return tokens;
+}
+
+function scrapeDexScreener() {
+  const tokens = [], seen = new Set();
+  document.querySelectorAll('a[href]').forEach(link => {
+    const m = (link.getAttribute("href") || "").match(/^\/(solana|ethereum|base|bsc|arbitrum|polygon|optimism|sui)\/([A-Za-z0-9]{20,})/);
+    if (!m || seen.has(m[2])) return;
+    seen.add(m[2]);
+    const row = findRow(link);
+    const { name, symbol } = extractInfo(row || link);
+    tokens.push({ chain: m[1], address: m[2], name, symbol, element: link });
+  });
+  return tokens;
+}
+
+function findRow(el) {
+  return el.closest('tr, [class*="ow"], [class*="item"], [class*="Item"], [class*="card"], [class*="Card"], [class*="pair"], [class*="Pair"]')
+    || el.parentElement?.parentElement;
+}
+
+function extractInfo(el) {
+  const text = el?.textContent || "";
+  const symMatch = text.match(/\$?([A-Z][A-Z0-9$]{1,9})\b/);
+  const parts = text.split(/[\n\t/|·]+/).map(s => s.trim()).filter(s => s.length >= 2 && s.length <= 30);
+  const name = parts.find(p => !/^[A-Z0-9$]+$/.test(p) && !/^\d/.test(p)) || parts[0] || "?";
+  return { name, symbol: symMatch ? symMatch[1] : "?" };
+}
+
+function findTwitter(el) {
+  if (!el) return null;
+  const c = el.closest('tr, div, [class*="row"], [class*="Row"]') || el;
+  for (const a of c.querySelectorAll('a[href*="x.com"], a[href*="twitter.com"]')) {
+    const h = a.getAttribute("href");
+    if (h && (h.includes("x.com/") || h.includes("twitter.com/"))) return h;
+  }
+  return null;
+}
+
+
+// ── Message handling ────────────────────────────────────────
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === "TOKEN_RESULT") {
+    pendingAddrs.delete(msg.address);
+    evaluated.set(msg.address, msg);
+    addToFeed(msg);
+  }
+});
+
+
+// ── Init ────────────────────────────────────────────────────
+
+async function init() {
+  buildSidebar();
+
+  // Load settings
+  chrome.storage.local.get({ apiKey: "", enabled: true, scanInterval: 5 }, (data) => {
+    settings = data;
+    document.getElementById("cs-key").value = data.apiKey || "";
+    document.getElementById("cs-iv").value = data.scanInterval || 5;
+    document.getElementById("cs-iv-label").textContent = data.scanInterval || 5;
+
+    if (!data.apiKey) {
+      document.getElementById("cs-settings").style.display = "block";
+      document.getElementById("cs-empty").innerHTML =
+        '⚙️ Paste your <a href="https://console.anthropic.com" target="_blank" style="color:#8b5cf6">Anthropic API key</a> above to start';
+      return;
+    }
+
+    // Start scanning
+    setTimeout(() => scanPage(), 2000);
+    setInterval(() => scanPage(), (data.scanInterval || 5) * 1000);
+  });
 
   // Re-scan on SPA navigation
   let lastUrl = location.href;
@@ -39,212 +304,131 @@ async function init() {
   }).observe(document.body, { childList: true, subtree: true });
 }
 
+init();
 
-// ── Scrape tokens from DOM ──────────────────────────────────
 
-function scanPage() {
-  const tokens = SITE === "gmgn" ? scrapeGMGN() : scrapeDexScreener();
+// ── CSS (injected inline to avoid conflicts) ────────────────
 
-  // Only send tokens we haven't evaluated yet
-  const newTokens = tokens.filter(t => !evaluated.has(t.address) && !pendingAddresses.has(t.address));
-
-  if (newTokens.length > 0) {
-    newTokens.forEach(t => pendingAddresses.add(t.address));
-    chrome.runtime.sendMessage({ type: "EVALUATE_TOKENS", tokens: newTokens });
-  }
-
-  // Re-apply existing badges (SPA may have re-rendered rows)
-  for (const [addr, result] of evaluated) {
-    applyBadge(addr, result);
-  }
+const SIDEBAR_CSS = `
+#cs-sidebar {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: 320px; z-index: 999999;
+  background: #0a0a0f;
+  border-left: 1px solid #1e1e2e;
+  display: flex; flex-direction: column;
+  font-family: system-ui, -apple-system, sans-serif;
+  color: #d1d5db;
+  font-size: 13px;
 }
 
+#cs-drag {
+  position: absolute; left: -4px; top: 0; bottom: 0; width: 8px;
+  cursor: col-resize; z-index: 1000000;
+}
+#cs-drag:hover, #cs-drag:active { background: #8b5cf622; }
 
-function scrapeGMGN() {
-  const tokens = [];
-  const seen = new Set();
+#cs-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid #1e1e2e;
+  flex-shrink: 0;
+}
+#cs-title { font-weight: 800; font-size: 14px; }
+#cs-head-right { display: flex; align-items: center; gap: 8px; }
+#cs-count {
+  background: #8b5cf6; color: #fff; font-size: 11px; font-weight: 700;
+  padding: 1px 7px; border-radius: 10px; min-width: 20px; text-align: center;
+}
+#cs-gear, #cs-collapse {
+  background: none; border: none; color: #888; font-size: 16px;
+  cursor: pointer; padding: 2px;
+}
+#cs-gear:hover, #cs-collapse:hover { color: #fff; }
 
-  // ── Strategy 1: Find links to token pages ─────────────────
-  // GMGN pattern: /sol/token/ADDRESS or /bsc/token/ADDRESS etc.
-  document.querySelectorAll('a[href]').forEach(link => {
-    const href = link.getAttribute("href") || "";
-    const match = href.match(/\/(sol|bsc|eth|base|tron|monad)\/token\/([A-Za-z0-9]{20,})/);
-    if (!match) return;
+#cs-settings {
+  padding: 10px 14px; border-bottom: 1px solid #1e1e2e;
+  flex-shrink: 0; background: #0f0f18;
+}
+#cs-settings label {
+  display: block; font-size: 11px; color: #888; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .4px; margin-bottom: 3px; margin-top: 8px;
+}
+#cs-settings label:first-child { margin-top: 0; }
+#cs-settings input[type="password"] {
+  width: 100%; padding: 7px 8px; border-radius: 6px;
+  border: 1px solid #2a2a3a; background: #141420; color: #e5e5e5;
+  font-size: 12px; font-family: monospace;
+}
+#cs-settings input[type="password"]:focus { outline: none; border-color: #8b5cf6; }
+#cs-settings input[type="range"] { width: 100%; accent-color: #8b5cf6; }
+#cs-settings-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+#cs-save {
+  padding: 6px 16px; border-radius: 6px; border: none;
+  background: #8b5cf6; color: #fff; font-weight: 700; font-size: 12px; cursor: pointer;
+}
+#cs-save:hover { background: #7c3aed; }
+#cs-saved { color: #22c55e; font-size: 12px; font-weight: 600; }
 
-    const chain = match[1];
-    const address = match[2];
-    if (seen.has(address)) return;
-    seen.add(address);
-
-    // Grab name/symbol from the link text or surrounding row
-    const row = findRow(link);
-    const { name, symbol } = extractNameSymbol(row || link);
-
-    // Check if there's a twitter link visible near this token
-    const twitterUrl = findNearbyTwitter(row || link);
-
-    tokens.push({ chain: normalizeChain(chain), address, name, symbol, twitterUrl, element: link });
-  });
-
-  // ── Strategy 2: Find raw Solana addresses in the page ─────
-  // Solana addresses are base58, typically 32-44 chars
-  document.querySelectorAll('[class*="address"], [class*="token"], [data-address]').forEach(el => {
-    const text = el.textContent?.trim() || el.dataset?.address || "";
-    const match = text.match(/([1-9A-HJ-NP-Za-km-z]{32,44})/);
-    if (match && !seen.has(match[1])) {
-      seen.add(match[1]);
-      const row = findRow(el);
-      const { name, symbol } = extractNameSymbol(row || el);
-      tokens.push({ chain: "solana", address: match[1], name, symbol, element: el });
-    }
-  });
-
-  // ── Strategy 3: Find EVM addresses (0x...) ────────────────
-  document.querySelectorAll('[class*="address"], [class*="token"]').forEach(el => {
-    const text = el.textContent?.trim() || "";
-    const match = text.match(/(0x[a-fA-F0-9]{40})/);
-    if (match && !seen.has(match[1])) {
-      seen.add(match[1]);
-      const row = findRow(el);
-      const { name, symbol } = extractNameSymbol(row || el);
-      // Chain detection: check URL or default to ethereum
-      const chain = location.pathname.includes("/bsc") ? "bsc"
-        : location.pathname.includes("/base") ? "base"
-        : "ethereum";
-      tokens.push({ chain, address: match[1], name, symbol, element: el });
-    }
-  });
-
-  return tokens;
+#cs-feed {
+  flex: 1; overflow-y: auto; padding: 6px;
+  scrollbar-width: thin; scrollbar-color: #333 transparent;
 }
 
-
-function scrapeDexScreener() {
-  const tokens = [];
-  const seen = new Set();
-
-  document.querySelectorAll('a[href]').forEach(link => {
-    const href = link.getAttribute("href") || "";
-    const match = href.match(/^\/(solana|ethereum|base|bsc|arbitrum|polygon|avalanche|optimism|sui)\/([A-Za-z0-9]{20,})/);
-    if (!match) return;
-
-    const chain = match[1];
-    const address = match[2];
-    if (seen.has(address)) return;
-    seen.add(address);
-
-    const row = findRow(link);
-    const { name, symbol } = extractNameSymbol(row || link);
-    tokens.push({ chain, address, name, symbol, element: link });
-  });
-
-  return tokens;
+#cs-empty {
+  padding: 40px 20px; text-align: center; color: #555;
+  font-size: 13px; line-height: 1.6;
 }
 
+.cs-card {
+  padding: 10px 12px; border-radius: 8px; margin-bottom: 4px;
+  border: 1px solid #1e1e2e;
+  transition: background .3s;
+  cursor: default;
+}
+.cs-card:hover { background: #1e1e2e; }
 
-// ── DOM helpers ─────────────────────────────────────────────
-
-function findRow(el) {
-  // Walk up the DOM to find the table row or card container
-  return el.closest('tr, [class*="row"], [class*="Row"], [class*="item"], [class*="Item"], [class*="card"], [class*="Card"], [class*="pair"], [class*="Pair"]')
-    || el.parentElement?.parentElement;
+.cs-card-top {
+  display: flex; align-items: center; gap: 6px;
+}
+.cs-card-emoji { font-size: 16px; }
+.cs-card-score {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-weight: 800; font-size: 15px;
+}
+.cs-card-sym {
+  font-weight: 700; font-size: 13px; color: #fff;
+}
+.cs-card-chain {
+  font-size: 10px; font-weight: 600; color: #888;
+  background: #1e1e2e; padding: 1px 5px; border-radius: 3px;
+  margin-left: auto;
 }
 
-function extractNameSymbol(el) {
-  const text = el?.textContent || "";
-  // Symbol: uppercase 2-10 chars, possibly with $
-  const symMatch = text.match(/\$?([A-Z][A-Z0-9]{1,9})\b/);
-  // Name: first reasonable mixed-case string
-  const parts = text.split(/[\n\t/|·]+/).map(s => s.trim()).filter(s => s.length >= 2 && s.length <= 30);
-  const name = parts.find(p => !/^[A-Z0-9$]+$/.test(p) && !/^\d/.test(p)) || parts[0] || "?";
-
-  return { name, symbol: symMatch ? symMatch[1] : "?" };
+.cs-card-name {
+  font-size: 11px; color: #888; margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-function findNearbyTwitter(el) {
-  if (!el) return null;
-  // Look for twitter/x links within the same row or nearby
-  const container = el.closest('tr, div, [class*="row"], [class*="Row"]') || el;
-  const links = container.querySelectorAll('a[href*="x.com"], a[href*="twitter.com"]');
-  for (const link of links) {
-    const href = link.getAttribute("href");
-    if (href && (href.includes("x.com/") || href.includes("twitter.com/"))) {
-      return href;
-    }
-  }
-  return null;
+.cs-card-reason {
+  font-size: 12px; color: #aaa; margin-top: 4px; line-height: 1.4;
 }
 
-function normalizeChain(chain) {
-  const map = { sol: "solana", bsc: "bsc", eth: "ethereum", base: "base", tron: "tron", monad: "monad" };
-  return map[chain] || chain;
+.cs-card-link {
+  display: inline-block; margin-top: 6px;
+  font-size: 11px; color: #8b5cf6; text-decoration: none; font-weight: 600;
 }
+.cs-card-link:hover { color: #a78bfa; }
 
-
-// ── Receive results from background ─────────────────────────
-
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === "TOKEN_RESULT") {
-    pendingAddresses.delete(msg.address);
-    evaluated.set(msg.address, msg);
-    applyBadge(msg.address, msg);
-  }
-});
-
-
-// ── Badge overlay ───────────────────────────────────────────
-
-function applyBadge(address, result) {
-  // Find all elements linking to this token address
-  const allLinks = document.querySelectorAll('a[href]');
-  for (const link of allLinks) {
-    const href = link.getAttribute("href") || "";
-    if (!href.includes(address)) continue;
-
-    const row = findRow(link);
-    if (!row) continue;
-
-    // Skip if badge already exists on this exact row
-    if (row.querySelector(`.cs-badge[data-addr="${address}"]`)) continue;
-
-    const badge = document.createElement("div");
-    badge.className = "cs-badge";
-    badge.dataset.addr = address;
-
-    const emoji = { gem: "💎", interesting: "👀", meh: "😐", skip: "👎", scam: "🚩", error: "⚠️", pending: "⏳" }[result.verdict] || "❓";
-    const color = result.score < 0 ? "#555"
-      : result.score >= 70 ? "#16a34a"
-      : result.score >= 50 ? "#ca8a04"
-      : result.score >= 30 ? "#ea580c"
-      : "#dc2626";
-
-    badge.innerHTML = `
-      <span class="cs-score" style="background:${color}">${emoji} ${result.score >= 0 ? result.score : "?"}</span>
-      <span class="cs-tip">
-        <strong>${(result.verdict || "?").toUpperCase()}</strong><br>
-        ${esc(result.reason || "Evaluating...")}
-      </span>
-    `;
-
-    row.style.position = row.style.position || "relative";
-    row.appendChild(badge);
-    break; // one badge per address
-  }
+/* Collapsed tab */
+#cs-tab {
+  position: fixed; right: 0; top: 50%; transform: translateY(-50%);
+  z-index: 999999;
+  width: 32px; height: 48px;
+  background: #0a0a0f; border: 1px solid #1e1e2e;
+  border-right: none; border-radius: 8px 0 0 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; cursor: pointer;
+  color: #fff;
 }
-
-function esc(s) {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
-}
-
-
-// ── Settings ────────────────────────────────────────────────
-
-function getSettings() {
-  return new Promise(resolve => {
-    chrome.runtime.sendMessage({ type: "GET_SETTINGS" }, r => {
-      resolve(r || { enabled: true, apiKey: "", scanInterval: 5 });
-    });
-  });
-}
+#cs-tab:hover { background: #1e1e2e; }
+`;

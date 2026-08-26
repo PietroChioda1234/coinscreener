@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Coin Screener",
-  "version": "0.2.0",
-  "description": "AI meme quality scanner — overlays on GMGN and DexScreener",
+  "version": "0.3.0",
+  "description": "AI meme quality scanner — sidebar on GMGN and DexScreener",
   "permissions": ["storage"],
   "host_permissions": [
     "https://gmgn.ai/*",
@@ -14,22 +14,12 @@
   ],
   "content_scripts": [
     {
-      "matches": ["https://gmgn.ai/*"],
+      "matches": ["https://gmgn.ai/*", "https://dexscreener.com/*"],
       "js": ["content.js"],
-      "css": ["overlay.css"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["https://dexscreener.com/*"],
-      "js": ["content.js"],
-      "css": ["overlay.css"],
       "run_at": "document_idle"
     }
   ],
   "background": {
     "service_worker": "background.js"
-  },
-  "action": {
-    "default_popup": "popup.html"
   }
 }
