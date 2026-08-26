@@ -1,17 +1,12 @@
 /*
- * content.js — sidebar + scraper (no LLM needed)
- *
- * Scrapes tokens from GMGN / DexScreener and shows them
- * in a sidebar as a live feed. No API key required.
- *
- * If an API key is set, it also sends tokens to background.js
- * for AI meme quality scoring (optional upgrade).
+ * content.js — sidebar + scraper
+ * v0.6 — cleaner cards, rug check, 3 filter levels
  */
 
 const SITE = location.hostname.includes("gmgn") ? "gmgn" : "dexscreener";
-const found = new Map(); // address -> token data with socials
+const found = new Map();
 let scanCount = 0;
-let filterLevel = "easy"; // easy | medium | high
+let filterLevel = "easy";
 
 // ── CSS ─────────────────────────────────────────────────────
 
@@ -29,7 +24,7 @@ const CSS = `
   position: absolute; left: -4px; top: 0; bottom: 0; width: 8px;
   cursor: col-resize; z-index: 1000000;
 }
-#cs-drag:hover, #cs-drag:active { background: #8b5cf622; }
+#cs-drag:hover { background: #8b5cf622; }
 #cs-head {
   display: flex; justify-content: space-between; align-items: center;
   padding: 10px 14px; border-bottom: 1px solid #1e1e2e; flex-shrink: 0;
@@ -38,7 +33,7 @@ const CSS = `
 #cs-head-right { display: flex; align-items: center; gap: 8px; }
 #cs-count {
   background: #8b5cf6; color: #fff; font-size: 11px; font-weight: 700;
-  padding: 1px 7px; border-radius: 10px; min-width: 20px; text-align: center;
+  padding: 1px 7px; border-radius: 10px;
 }
 #cs-gear, #cs-collapse {
   background: none; border: none; color: #888; font-size: 16px;
@@ -66,44 +61,62 @@ const CSS = `
   padding: 6px 16px; border-radius: 6px; border: none;
   background: #8b5cf6; color: #fff; font-weight: 700; font-size: 12px; cursor: pointer;
 }
-#cs-save:hover { background: #7c3aed; }
 #cs-saved { color: #22c55e; font-size: 12px; font-weight: 600; }
+#cs-filters {
+  display: flex; gap: 4px; padding: 8px 14px;
+  border-bottom: 1px solid #1e1e2e; flex-shrink: 0;
+}
+.cs-fbtn {
+  flex: 1; padding: 6px 0; border-radius: 6px; border: 1px solid #1e1e2e;
+  background: transparent; color: #888; font-size: 11px; font-weight: 700;
+  cursor: pointer; text-align: center; transition: all .15s;
+}
+.cs-fbtn:hover { border-color: #333; color: #ccc; }
+.cs-fbtn.on-easy { background: #22c55e18; border-color: #22c55e44; color: #4ade80; }
+.cs-fbtn.on-medium { background: #eab30818; border-color: #eab30844; color: #facc15; }
+.cs-fbtn.on-high { background: #ef444418; border-color: #ef444444; color: #f87171; }
 #cs-feed {
   flex: 1; overflow-y: auto; padding: 6px;
   scrollbar-width: thin; scrollbar-color: #333 transparent;
 }
 .cs-card {
   padding: 10px 12px; border-radius: 8px; margin-bottom: 4px;
-  border: 1px solid #1e1e2e; transition: background .3s; cursor: default;
+  border: 1px solid #1e1e2e; transition: background .3s;
 }
 .cs-card.cs-new { background: #1e293b; }
 .cs-card:hover { background: #1e1e2e; }
-.cs-card-top { display: flex; align-items: center; gap: 6px; }
-.cs-card-sym { font-weight: 700; font-size: 14px; color: #fff; }
+.cs-card-top { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.cs-card-sym { font-weight: 800; font-size: 14px; color: #fff; }
 .cs-card-chain {
   font-size: 10px; font-weight: 600; color: #888;
   background: #1e1e2e; padding: 1px 5px; border-radius: 3px;
 }
-.cs-card-score {
-  margin-left: auto;
-  font-family: 'JetBrains Mono', monospace; font-weight: 800; font-size: 13px;
-  padding: 2px 8px; border-radius: 5px; color: #fff;
+.cs-card-rug {
+  margin-left: auto; font-size: 11px; font-weight: 700;
+  padding: 2px 7px; border-radius: 4px;
 }
 .cs-card-name {
-  font-size: 11px; color: #888; margin-top: 2px;
+  font-size: 11px; color: #666; margin-bottom: 6px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.cs-card-reason {
-  font-size: 12px; color: #aaa; margin-top: 4px; line-height: 1.4;
+.cs-has { margin-bottom: 4px; }
+.cs-has a {
+  display: inline-block; font-size: 11px; color: #4ade80; text-decoration: none;
+  font-weight: 600; margin-right: 8px; line-height: 1.6;
 }
-.cs-card-twitter {
-  font-size: 11px; color: #1d9bf0; margin-top: 2px;
+.cs-has a:hover { color: #86efac; }
+.cs-missing {
+  font-size: 10px; color: #444; margin-bottom: 4px; line-height: 1.6;
 }
-.cs-card-links { display: flex; gap: 6px; margin-top: 6px; }
-.cs-card-link {
+.cs-rug-risks {
+  font-size: 11px; color: #f87171; margin-top: 4px; line-height: 1.5;
+}
+.cs-card-open {
+  display: inline-block; margin-top: 4px;
   font-size: 11px; color: #8b5cf6; text-decoration: none; font-weight: 600;
 }
-.cs-card-link:hover { color: #a78bfa; }
+.cs-card-open:hover { color: #a78bfa; }
+.cs-hidden { display: none !important; }
 #cs-status {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 14px; border-top: 1px solid #1e1e2e; flex-shrink: 0;
@@ -115,7 +128,6 @@ const CSS = `
 #cs-dot.active { background: #22c55e; animation: cs-pulse 1.5s ease-in-out infinite; }
 #cs-dot.waiting { background: #eab308; }
 @keyframes cs-pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-#cs-status-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #cs-tab {
   position: fixed; right: 0; top: 50%; transform: translateY(-50%);
   z-index: 999999; width: 32px; height: 48px;
@@ -125,28 +137,6 @@ const CSS = `
   font-size: 18px; cursor: pointer; color: #fff;
 }
 #cs-tab:hover { background: #1e1e2e; }
-#cs-filters {
-  display: flex; gap: 4px; padding: 8px 14px;
-  border-bottom: 1px solid #1e1e2e; flex-shrink: 0;
-}
-.cs-filter-btn {
-  flex: 1; padding: 6px 0; border-radius: 6px; border: 1px solid #1e1e2e;
-  background: transparent; color: #888; font-size: 11px; font-weight: 700;
-  cursor: pointer; text-align: center; transition: all .15s;
-}
-.cs-filter-btn:hover { border-color: #333; color: #ccc; }
-.cs-filter-btn.active-easy { background: #22c55e22; border-color: #22c55e55; color: #4ade80; }
-.cs-filter-btn.active-medium { background: #eab30822; border-color: #eab30855; color: #facc15; }
-.cs-filter-btn.active-high { background: #ef444422; border-color: #ef444455; color: #f87171; }
-.cs-card-socials {
-  display: flex; gap: 4px; margin-top: 4px;
-}
-.cs-social-tag {
-  font-size: 10px; padding: 1px 5px; border-radius: 3px;
-  background: #1e1e2e; color: #888;
-}
-.cs-social-tag.has { color: #4ade80; background: #22c55e18; }
-.cs-hidden { display: none !important; }
 `;
 
 
@@ -154,7 +144,6 @@ const CSS = `
 
 function buildSidebar() {
   if (document.getElementById("cs-root")) return;
-
   const root = document.createElement("div");
   root.id = "cs-root";
   root.innerHTML = `
@@ -180,9 +169,9 @@ function buildSidebar() {
         </div>
       </div>
       <div id="cs-filters">
-        <button class="cs-filter-btn active-easy" data-level="easy">🟢 ALL</button>
-        <button class="cs-filter-btn" data-level="medium">🟡 HAS 𝕏</button>
-        <button class="cs-filter-btn" data-level="high">🔴 SAFE</button>
+        <button class="cs-fbtn on-easy" data-level="easy">🟢 ALL</button>
+        <button class="cs-fbtn" data-level="medium">🟡 HAS 𝕏</button>
+        <button class="cs-fbtn" data-level="high">🔴 SAFE</button>
       </div>
       <div id="cs-feed"></div>
       <div id="cs-status">
@@ -200,7 +189,7 @@ function buildSidebar() {
     settingsEl.style.display = settingsEl.style.display === "none" ? "block" : "none";
   };
 
-  // Collapse / expand
+  // Collapse/expand
   const sidebar = document.getElementById("cs-sidebar");
   const tab = document.getElementById("cs-tab");
   document.getElementById("cs-collapse").onclick = () => {
@@ -214,21 +203,22 @@ function buildSidebar() {
 
   // Interval slider
   const ivSlider = document.getElementById("cs-iv");
-  const ivLabel = document.getElementById("cs-iv-label");
-  ivSlider.oninput = () => { ivLabel.textContent = ivSlider.value; };
+  document.getElementById("cs-iv").oninput = () => {
+    document.getElementById("cs-iv-label").textContent = ivSlider.value;
+  };
 
   // Save
   document.getElementById("cs-save").onclick = () => {
-    const key = document.getElementById("cs-key").value.trim();
-    const interval = parseInt(ivSlider.value) || 3;
-    chrome.storage.local.set({ apiKey: key, scanInterval: interval }, () => {
+    chrome.storage.local.set({
+      apiKey: document.getElementById("cs-key").value.trim(),
+      scanInterval: parseInt(ivSlider.value) || 3,
+    }, () => {
       document.getElementById("cs-saved").textContent = "✓ Saved";
       setTimeout(() => { document.getElementById("cs-saved").textContent = ""; }, 2000);
-      setStatus(key ? "Saved — AI scoring enabled" : "Saved — running without AI", "active");
     });
   };
 
-  // Drag to resize
+  // Drag resize
   let dragging = false;
   document.getElementById("cs-drag").onmousedown = (e) => { dragging = true; e.preventDefault(); };
   document.addEventListener("mousemove", (e) => {
@@ -239,21 +229,150 @@ function buildSidebar() {
   });
   document.addEventListener("mouseup", () => { dragging = false; });
 
-  // Push page content
-  document.body.style.marginRight = "320px";
-  document.body.style.transition = "margin-right .2s";
-
   // Filter buttons
-  document.querySelectorAll('.cs-filter-btn').forEach(btn => {
+  document.querySelectorAll('.cs-fbtn').forEach(btn => {
     btn.onclick = () => {
       filterLevel = btn.dataset.level;
-      // Update active state
-      document.querySelectorAll('.cs-filter-btn').forEach(b => {
-        b.className = "cs-filter-btn" + (b.dataset.level === filterLevel ? ` active-${filterLevel}` : "");
+      document.querySelectorAll('.cs-fbtn').forEach(b => {
+        b.className = "cs-fbtn" + (b.dataset.level === filterLevel ? ` on-${filterLevel}` : "");
       });
       applyFilter();
     };
   });
+
+  document.body.style.marginRight = "320px";
+  document.body.style.transition = "margin-right .2s";
+}
+
+
+// ── Cards ───────────────────────────────────────────────────
+
+function addToFeed(token) {
+  const feed = document.getElementById("cs-feed");
+  if (!feed) return;
+
+  const chain = token.chain || "?";
+  const chainShort = { solana:"SOL", ethereum:"ETH", base:"BASE", bsc:"BSC" }[chain] || chain.slice(0,3).toUpperCase();
+
+  const openUrl = token.pumpUrl
+    || (SITE === "gmgn" ? `https://gmgn.ai/${({solana:"sol",ethereum:"eth",base:"base",bsc:"bsc"})[chain]||"sol"}/token/${token.address}` 
+    : `https://dexscreener.com/${chain}/${token.address}`);
+
+  const hasT = !!token.twitter;
+  const hasTg = !!token.telegram;
+  const hasW = !!token.website;
+
+  // Build "has" links
+  let hasHtml = '';
+  if (hasT) hasHtml += `<a href="${esc(token.twitter)}" target="_blank">𝕏 Twitter</a>`;
+  if (hasTg) hasHtml += `<a href="${esc(token.telegram)}" target="_blank">💬 Telegram</a>`;
+  if (hasW) hasHtml += `<a href="${esc(token.website)}" target="_blank">🌐 Website</a>`;
+
+  // Build "missing" text
+  const missingParts = [];
+  if (!hasT) missingParts.push("Twitter");
+  if (!hasTg) missingParts.push("Telegram");
+  if (!hasW) missingParts.push("Website");
+  const missingHtml = missingParts.length ? `<div class="cs-missing">Missing: ${missingParts.join(", ")}</div>` : '';
+
+  const card = document.createElement("div");
+  card.className = "cs-card cs-new";
+  card.dataset.address = token.address;
+
+  card.innerHTML = `
+    <div class="cs-card-top">
+      <span class="cs-card-sym">${esc(token.symbol)}</span>
+      <span class="cs-card-chain">${chainShort}</span>
+      <span class="cs-card-rug" id="cs-rug-${token.address}" style="background:#333;color:#888">⏳</span>
+    </div>
+    <div class="cs-card-name">${esc(token.name)}</div>
+    ${hasHtml ? `<div class="cs-has">${hasHtml}</div>` : ''}
+    ${missingHtml}
+    <div class="cs-rug-risks" id="cs-risks-${token.address}"></div>
+    <a class="cs-card-open" href="${openUrl}" target="_blank">Open →</a>
+    <a class="cs-card-open" href="https://rugcheck.xyz/tokens/${token.address}" target="_blank" style="margin-left:8px;color:#eab308">RugCheck →</a>
+  `;
+
+  feed.prepend(card);
+  setTimeout(() => { card.classList.remove("cs-new"); }, 2000);
+
+  if (!passesFilter(token)) card.classList.add("cs-hidden");
+  updateCount();
+}
+
+function updateRugBadge(address, result) {
+  const badge = document.getElementById(`cs-rug-${address}`);
+  const risksEl = document.getElementById(`cs-risks-${address}`);
+  if (!badge) return;
+
+  if (result.score < 0) {
+    badge.textContent = "?";
+    badge.style.background = "#333";
+    badge.style.color = "#888";
+    return;
+  }
+
+  // RugCheck: lower score = safer. 0-300 good, 300-600 warning, 600+ danger
+  let label, bg, color;
+  if (result.score <= 300) {
+    label = "✅ Good"; bg = "#16a34a33"; color = "#4ade80";
+  } else if (result.score <= 600) {
+    label = "⚠️ Warn"; bg = "#ca8a0433"; color = "#facc15";
+  } else {
+    label = "🚩 Risk"; bg = "#dc262633"; color = "#f87171";
+  }
+
+  badge.textContent = label;
+  badge.style.background = bg;
+  badge.style.color = color;
+
+  // Show risk details
+  if (risksEl && result.risks && result.risks.length > 0) {
+    const top3 = result.risks.slice(0, 3);
+    risksEl.innerHTML = top3.map(r => `⚠ ${esc(r.name)}`).join('<br>');
+  }
+  if (risksEl && result.flags && result.flags.length > 0) {
+    risksEl.innerHTML += (risksEl.innerHTML ? '<br>' : '') + result.flags.map(f => `⚠ ${esc(f)}`).join('<br>');
+  }
+
+  // Update stored token data with rug result
+  const token = found.get(address);
+  if (token) {
+    token.rugScore = result.score;
+    token.rugStatus = result.status;
+  }
+}
+
+
+// ── Filtering ───────────────────────────────────────────────
+
+function passesFilter(token) {
+  if (filterLevel === "easy") return true;
+  if (filterLevel === "medium") return !!token.twitter;
+  if (filterLevel === "high") {
+    const socials = [token.twitter, token.telegram, token.website].filter(Boolean).length;
+    return !!token.twitter && socials >= 2;
+  }
+  return true;
+}
+
+function applyFilter() {
+  const feed = document.getElementById("cs-feed");
+  if (!feed) return;
+  for (const card of feed.querySelectorAll('.cs-card')) {
+    const token = found.get(card.dataset.address);
+    if (!token) continue;
+    card.classList.toggle("cs-hidden", !passesFilter(token));
+  }
+  updateCount();
+}
+
+function updateCount() {
+  const feed = document.getElementById("cs-feed");
+  const el = document.getElementById("cs-count");
+  if (!feed || !el) return;
+  const visible = feed.querySelectorAll('.cs-card:not(.cs-hidden)').length;
+  el.textContent = `${visible}/${found.size}`;
 }
 
 
@@ -262,133 +381,8 @@ function buildSidebar() {
 function setStatus(text, state = "active") {
   const dot = document.getElementById("cs-dot");
   const label = document.getElementById("cs-status-text");
-  if (dot) { dot.className = state; }
+  if (dot) dot.className = state;
   if (label) label.textContent = text;
-}
-
-
-// ── Add token to feed ───────────────────────────────────────
-
-function addToFeed(token) {
-  const feed = document.getElementById("cs-feed");
-  if (!feed) return;
-
-  const chain = token.chain || "?";
-  const chainShort = { solana:"SOL", ethereum:"ETH", base:"BASE", bsc:"BSC", tron:"TRON", monad:"MON" }[chain] || chain.slice(0,4).toUpperCase();
-
-  let link;
-  if (token.pumpUrl) {
-    link = token.pumpUrl;
-  } else if (SITE === "gmgn") {
-    const cMap = { solana:"sol", ethereum:"eth", base:"base", bsc:"bsc" };
-    link = `https://gmgn.ai/${cMap[chain] || "sol"}/token/${token.address}`;
-  } else {
-    link = `https://dexscreener.com/${chain}/${token.address}`;
-  }
-
-  const hasT = !!token.twitter;
-  const hasTg = !!token.telegram;
-  const hasW = !!token.website;
-  const socialCount = [hasT, hasTg, hasW].filter(Boolean).length;
-
-  const card = document.createElement("div");
-  card.className = "cs-card cs-new";
-  card.id = `cs-token-${token.address}`;
-  card.dataset.address = token.address;
-
-  card.innerHTML = `
-    <div class="cs-card-top">
-      <span class="cs-card-sym">${esc(token.symbol)}</span>
-      <span class="cs-card-chain">${chainShort}</span>
-      <span class="cs-card-score" id="cs-score-${token.address}" style="display:none"></span>
-    </div>
-    <div class="cs-card-name">${esc(token.name)}</div>
-    <div class="cs-card-socials">
-      <span class="cs-social-tag ${hasT ? 'has' : ''}">𝕏 ${hasT ? '✓' : '✗'}</span>
-      <span class="cs-social-tag ${hasTg ? 'has' : ''}">TG ${hasTg ? '✓' : '✗'}</span>
-      <span class="cs-social-tag ${hasW ? 'has' : ''}">Web ${hasW ? '✓' : '✗'}</span>
-    </div>
-    <div class="cs-card-reason" id="cs-reason-${token.address}"></div>
-    <div class="cs-card-links">
-      <a class="cs-card-link" href="${link}" target="_blank">Open →</a>
-      ${hasT ? `<a class="cs-card-link" href="${esc(token.twitter)}" target="_blank">Twitter →</a>` : ''}
-      ${hasTg ? `<a class="cs-card-link" href="${esc(token.telegram)}" target="_blank">Telegram →</a>` : ''}
-      ${hasW ? `<a class="cs-card-link" href="${esc(token.website)}" target="_blank">Website →</a>` : ''}
-      <a class="cs-card-link" href="https://rugcheck.xyz/tokens/${token.address}" target="_blank" style="color:#eab308">RugCheck →</a>
-    </div>
-  `;
-
-  feed.prepend(card);
-  setTimeout(() => { card.classList.remove("cs-new"); }, 2000);
-
-  // Apply current filter to this card
-  if (!passesFilter(token)) card.classList.add("cs-hidden");
-
-  updateCount();
-}
-
-function passesFilter(token) {
-  const hasT = !!token.twitter;
-  const hasTg = !!token.telegram;
-  const hasW = !!token.website;
-  const socialCount = [hasT, hasTg, hasW].filter(Boolean).length;
-
-  if (filterLevel === "easy") return true;
-
-  if (filterLevel === "medium") {
-    // Must have Twitter
-    return hasT;
-  }
-
-  if (filterLevel === "high") {
-    // Must have Twitter + at least one more (Telegram or Website)
-    return hasT && socialCount >= 2;
-  }
-
-  return true;
-}
-
-function applyFilter() {
-  const feed = document.getElementById("cs-feed");
-  if (!feed) return;
-
-  for (const card of feed.querySelectorAll('.cs-card')) {
-    const addr = card.dataset.address;
-    const token = found.get(addr);
-    if (!token) continue;
-    if (passesFilter(token)) {
-      card.classList.remove("cs-hidden");
-    } else {
-      card.classList.add("cs-hidden");
-    }
-  }
-
-  updateCount();
-}
-
-function updateCount() {
-  const feed = document.getElementById("cs-feed");
-  const countEl = document.getElementById("cs-count");
-  if (!feed || !countEl) return;
-  const visible = feed.querySelectorAll('.cs-card:not(.cs-hidden)').length;
-  countEl.textContent = `${visible}/${found.size}`;
-}
-
-function updateCardWithScore(address, result) {
-  const scoreEl = document.getElementById(`cs-score-${address}`);
-  const reasonEl = document.getElementById(`cs-reason-${address}`);
-  if (!scoreEl || !reasonEl) return;
-
-  const emoji = { gem:"💎", interesting:"👀", meh:"😐", skip:"👎", scam:"🚩" }[result.verdict] || "❓";
-  const bg = result.score >= 70 ? "#16a34a"
-    : result.score >= 50 ? "#ca8a04"
-    : result.score >= 30 ? "#ea580c"
-    : "#dc2626";
-
-  scoreEl.style.display = "inline-block";
-  scoreEl.style.background = bg;
-  scoreEl.textContent = `${emoji} ${result.score}`;
-  reasonEl.textContent = result.reason || "";
 }
 
 function esc(s) { const d = document.createElement("span"); d.textContent = s || ""; return d.innerHTML; }
@@ -400,26 +394,18 @@ function scanPage() {
   scanCount++;
   const tokens = SITE === "gmgn" ? scrapeGMGN() : scrapeDexScreener();
 
-  let newCount = 0;
+  const newTokens = [];
   for (const t of tokens) {
     if (found.has(t.address)) continue;
     found.set(t.address, t);
     addToFeed(t);
-    newCount++;
+    newTokens.push(t);
   }
 
-  if (newCount > 0) {
-    setStatus(`+${newCount} new · ${found.size} total · scan #${scanCount}`, "active");
-
-    // If API key is set, send new tokens for AI scoring
-    chrome.storage.local.get({ apiKey: "" }, (data) => {
-      if (data.apiKey) {
-        const newTokens = tokens.filter(t => !t._scored);
-        if (newTokens.length) {
-          chrome.runtime.sendMessage({ type: "EVALUATE_TOKENS", tokens: newTokens });
-        }
-      }
-    });
+  if (newTokens.length > 0) {
+    setStatus(`+${newTokens.length} new · ${found.size} total · scan #${scanCount}`, "active");
+    // Send to background for rug check
+    chrome.runtime.sendMessage({ type: "CHECK_TOKENS", tokens: newTokens });
   } else if (tokens.length > 0) {
     setStatus(`Watching · ${found.size} found · scan #${scanCount}`, "active");
   } else {
@@ -430,7 +416,6 @@ function scanPage() {
 function scrapeGMGN() {
   const tokens = [], seen = new Set();
 
-  // GMGN links to pump.fun/coin/ADDRESS for Solana tokens
   document.querySelectorAll('a[href*="pump.fun/coin/"]').forEach(link => {
     const m = (link.getAttribute("href") || "").match(/pump\.fun\/coin\/([A-Za-z0-9]{20,})/);
     if (!m || seen.has(m[1])) return;
@@ -441,7 +426,6 @@ function scrapeGMGN() {
     tokens.push({ chain: "solana", address: m[1], name, symbol, ...socials, pumpUrl: link.getAttribute("href") });
   });
 
-  // Also check for any internal GMGN token links: /sol/token/ADDR etc.
   document.querySelectorAll('a[href*="/token/"]').forEach(link => {
     const m = (link.getAttribute("href") || "").match(/\/(sol|bsc|eth|base|tron|monad)\/token\/([A-Za-z0-9]{20,})/);
     if (!m || seen.has(m[2])) return;
@@ -449,14 +433,12 @@ function scrapeGMGN() {
     const row = findRow(link);
     const { name, symbol } = extractInfo(row || link);
     const socials = findSocials(link);
-    const chain = { sol:"solana", bsc:"bsc", eth:"ethereum", base:"base", tron:"tron", monad:"monad" }[m[1]] || m[1];
+    const chain = { sol:"solana", bsc:"bsc", eth:"ethereum", base:"base" }[m[1]] || m[1];
     tokens.push({ chain, address: m[2], name, symbol, ...socials });
   });
 
-  // Also catch Raydium / letsbonk / other launchpad links
   document.querySelectorAll('a[href*="raydium.io"], a[href*="letsbonk.fun"]').forEach(link => {
-    const href = link.getAttribute("href") || "";
-    const m = href.match(/([1-9A-HJ-NP-Za-km-z]{32,44})/);
+    const m = (link.getAttribute("href") || "").match(/([1-9A-HJ-NP-Za-km-z]{32,44})/);
     if (!m || seen.has(m[1])) return;
     seen.add(m[1]);
     const row = findRow(link);
@@ -476,23 +458,20 @@ function scrapeDexScreener() {
     seen.add(m[2]);
     const row = findRow(link);
     const { name, symbol } = extractInfo(row || link);
-    tokens.push({ chain: m[1], address: m[2], name, symbol });
+    const socials = findSocials(link);
+    tokens.push({ chain: m[1], address: m[2], name, symbol, ...socials });
   });
   return tokens;
 }
 
 function findRow(el) {
-  // Walk up looking for a container — GMGN uses divs, not tables
   let node = el;
   for (let i = 0; i < 6 && node; i++) {
     node = node.parentElement;
     if (!node) break;
-    // Stop at anything that looks like a row/card/item container
     const cl = node.className || "";
     if (cl.match(/row|item|card|pair|token|list/i)) return node;
-    // Or if it has multiple child links (likely a row with token + socials)
-    const childLinks = node.querySelectorAll('a[href]');
-    if (childLinks.length >= 3) return node;
+    if (node.querySelectorAll('a[href]').length >= 3) return node;
   }
   return el.parentElement?.parentElement?.parentElement || el.parentElement;
 }
@@ -506,19 +485,13 @@ function extractInfo(el) {
 }
 
 function findSocials(el) {
-  if (!el) return { twitter: null, telegram: null, website: null };
   const socials = { twitter: null, telegram: null, website: null };
-
-  // Walk up to find a good container
   const container = findRow(el) || el;
-  const links = container.querySelectorAll('a[href]');
 
-  for (const a of links) {
+  for (const a of container.querySelectorAll('a[href]')) {
     const h = a.getAttribute("href") || "";
-    if (!socials.twitter && (h.includes("x.com/") || h.includes("twitter.com/"))) {
-      // Skip status/tweet links — we want profile links
-      if (!h.match(/\/status\//)) socials.twitter = h;
-      else if (!socials.twitter) socials.twitter = h; // better than nothing
+    if (!socials.twitter && (h.includes("x.com/") || h.includes("twitter.com/")) && !h.match(/\/status\//)) {
+      socials.twitter = h;
     }
     if (!socials.telegram && (h.includes("t.me/") || h.includes("telegram.me/"))) {
       socials.telegram = h;
@@ -527,20 +500,19 @@ function findSocials(el) {
         !h.includes("pump.fun") && !h.includes("gmgn.ai") && !h.includes("x.com") &&
         !h.includes("twitter.com") && !h.includes("t.me") && !h.includes("telegram.") &&
         !h.includes("lens.google") && !h.includes("dexscreener") &&
-        !h.includes("raydium") && !h.includes("letsbonk")) {
+        !h.includes("raydium") && !h.includes("letsbonk") && !h.includes("nitter")) {
       socials.website = h;
     }
   }
-
   return socials;
 }
 
 
-// ── Receive AI scores (optional) ────────────────────────────
+// ── Receive rug check results ───────────────────────────────
 
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === "TOKEN_RESULT" && msg.score >= 0) {
-    updateCardWithScore(msg.address, msg);
+  if (msg.type === "RUG_RESULT") {
+    updateRugBadge(msg.address, msg);
   }
 });
 
@@ -551,30 +523,18 @@ function init() {
   buildSidebar();
   setStatus(`Ready — scanning ${SITE} in 2s`, "waiting");
 
-  // Load settings just for display
   chrome.storage.local.get({ apiKey: "", scanInterval: 3 }, (data) => {
     document.getElementById("cs-key").value = data.apiKey || "";
     document.getElementById("cs-iv").value = data.scanInterval || 3;
     document.getElementById("cs-iv-label").textContent = data.scanInterval || 3;
 
-    const interval = (data.scanInterval || 3) * 1000;
-
-    // Start scanning immediately — no API key needed
-    setTimeout(() => {
-      setStatus(`Scanning ${SITE}…`, "active");
-      scanPage();
-    }, 2000);
-
-    setInterval(() => scanPage(), interval);
+    setTimeout(() => { setStatus(`Scanning ${SITE}…`, "active"); scanPage(); }, 2000);
+    setInterval(() => scanPage(), (data.scanInterval || 3) * 1000);
   });
 
-  // Re-scan on SPA navigation
   let lastUrl = location.href;
   new MutationObserver(() => {
-    if (location.href !== lastUrl) {
-      lastUrl = location.href;
-      setTimeout(() => scanPage(), 1500);
-    }
+    if (location.href !== lastUrl) { lastUrl = location.href; setTimeout(() => scanPage(), 1500); }
   }).observe(document.body, { childList: true, subtree: true });
 }
 

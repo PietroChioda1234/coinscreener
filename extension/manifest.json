@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Coin Screener",
-  "version": "0.3.0",
+  "version": "0.6.0",
   "description": "AI meme quality scanner — sidebar on GMGN and DexScreener",
   "permissions": ["storage"],
   "host_permissions": [
     "https://gmgn.ai/*",
     "https://dexscreener.com/*",
     "https://api.dexscreener.com/*",
+    "https://api.rugcheck.xyz/*",
     "https://x.com/*",
     "https://twitter.com/*",
     "https://api.anthropic.com/*"
