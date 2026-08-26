@@ -765,7 +765,23 @@ function renderTracked(tracked) {
     `;
   }
 
-  container.innerHTML = html;
+  container.innerHTML = html + `
+    <button id="cs-clear-tracked" style="
+      width:100%; margin-top:12px; padding:10px; border-radius:8px;
+      border:1px solid #dc262644; background:#dc262618; color:#f87171;
+      font-size:12px; font-weight:600; cursor:pointer;
+    ">🗑 Clear all tracked data</button>
+  `;
+
+  document.getElementById("cs-clear-tracked").onclick = () => {
+    if (confirm("Remove all tracked tokens and price history? This cannot be undone.")) {
+      chrome.storage.local.set({ tracked: [] }, () => {
+        renderTracked([]);
+        setStatus("Tracking cleared", "waiting");
+      });
+    }
+  };
+
   setStatus(`${tracked.length} tracked · ${wins} up · ${peaked} pumped&dumped · ${totalWithData - wins - peaked} other`, "active");
 }
 
