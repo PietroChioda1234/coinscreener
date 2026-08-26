@@ -327,6 +327,14 @@ function addToFeed(token) {
     <div class="cs-card-name">${esc(token.name)}</div>
     ${hasHtml ? `<div class="cs-has">${hasHtml}</div>` : ''}
     ${missingHtml}
+    ${token.topHolders !== null || token.bundlePct !== null || token.holders !== null ? `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0;font-size:11px">
+      ${token.holders !== null ? `<span style="color:#888">👥 ${token.holders}</span>` : ''}
+      ${token.topHolders !== null ? `<span style="color:${token.topHolders > 20 ? '#f87171' : token.topHolders > 10 ? '#facc15' : '#4ade80'}">⭐ Top ${token.topHolders}%</span>` : ''}
+      ${token.bundlePct !== null ? `<span style="color:${token.bundlePct > 15 ? '#f87171' : token.bundlePct > 5 ? '#facc15' : '#4ade80'}">📦 Bndl ${token.bundlePct}%</span>` : ''}
+      ${token.insiderPct !== null ? `<span style="color:${token.insiderPct > 5 ? '#f87171' : token.insiderPct > 0 ? '#facc15' : '#4ade80'}">🐭 Ins ${token.insiderPct}%</span>` : ''}
+      ${token.sniperPct !== null ? `<span style="color:${token.sniperPct > 10 ? '#f87171' : '#888'}">🎯 Snp ${token.sniperPct}%</span>` : ''}
+    </div>` : ''}
     <div class="cs-rug-risks" id="cs-risks-${token.address}"></div>
     <a class="cs-card-open" href="${openUrl}" target="_blank">Open →</a>
     <a class="cs-card-open" href="https://rugcheck.xyz/tokens/${token.address}" target="_blank" style="margin-left:8px;color:#eab308">RugCheck →</a>
@@ -380,9 +388,12 @@ function passesFilter(token) {
     // Must have Twitter + at least one more social
     const socials = [token.twitter, token.telegram, token.website].filter(Boolean).length;
     if (!token.twitter || socials < 2) return false;
-    // Must NOT be flagged as Danger by RugCheck
-    // (tokens still pending check are shown — they get hidden if result is bad)
+    // Rug check must NOT be Danger
     if (token.rugStatus === "Danger") return false;
+    // On-chain red flags
+    if (token.topHolders !== null && token.topHolders > 25) return false;   // top holders too concentrated
+    if (token.insiderPct !== null && token.insiderPct > 10) return false;   // too many insiders
+    if (token.bundlePct !== null && token.bundlePct > 20) return false;     // too many bundle buys
     return true;
   }
   return true;
@@ -540,8 +551,7 @@ function scrapeGMGN() {
     const pumpLink = card.querySelector('a[href*="pump.fun/coin/"]');
     if (pumpLink) pumpUrl = pumpLink.getAttribute("href");
 
-    // 7. Scrape market cap and volume directly from card text
-    //    GMGN shows "MC $4.4K" and "V $2.6K" in the card
+    // 7. Scrape market cap and volume from card text
     let mcap = 0, volume = 0;
     const cardText = card.textContent || "";
     const mcMatch = cardText.match(/MC\s*\$([0-9.]+)\s*(K|M|B)?/i);
@@ -553,7 +563,41 @@ function scrapeGMGN() {
       volume = parseFloat(volMatch[1]) * (volMatch[2] === 'B' ? 1e9 : volMatch[2] === 'M' ? 1e6 : volMatch[2] === 'K' ? 1e3 : 1);
     }
 
-    tokens.push({ chain, address, name, symbol, twitter, twitterHandle, telegram, website, pumpUrl, mcap, volume });
+    // 8. Scrape on-chain stats from GMGN card icons
+    //    Each stat has an SVG icon followed by a value in a nearby span
+    let topHolders = null, bundlePct = null, insiderPct = null, holders = null, sniperPct = null;
+
+    // Helper: find the number text near an icon
+    function statNear(iconName) {
+      const icon = card.querySelector(`[data-icon="${iconName}"]`);
+      if (!icon) return null;
+      // Walk up to parent container, grab text
+      const container = icon.closest('[class*="flex"]') || icon.parentElement;
+      if (!container) return null;
+      const text = container.textContent || "";
+      const m = text.match(/([0-9.]+)\s*%?/);
+      return m ? parseFloat(m[1]) : null;
+    }
+
+    topHolders = statNear("IconTopholder16pxRegular");
+    bundlePct = statNear("IconBundle16pxRegular");
+    insiderPct = statNear("IconMouselab16pxRegular");
+    sniperPct = statNear("IconRaysniper16pxRegular");
+
+    // Holder count (no %, just a number)
+    const holderIcon = card.querySelector('[data-icon="IconHolders16pxRegular"]');
+    if (holderIcon) {
+      const hContainer = holderIcon.closest('[class*="flex"]') || holderIcon.parentElement;
+      if (hContainer) {
+        const hm = hContainer.textContent.match(/(\d+)/);
+        if (hm) holders = parseInt(hm[1]);
+      }
+    }
+
+    tokens.push({
+      chain, address, name, symbol, twitter, twitterHandle, telegram, website, pumpUrl,
+      mcap, volume, topHolders, bundlePct, insiderPct, holders, sniperPct,
+    });
   }
 
   // Fallback: if no cards found with data-testid, try sequential link scanning
@@ -664,6 +708,10 @@ function isSafeToTrack(token, rugStatus) {
   if (rugStatus === "Danger") return false;
   // Rug check must have actually returned a result (not unknown/error)
   if (rugStatus === "unknown" || rugStatus === "error") return false;
+  // On-chain red flags
+  if (token.topHolders !== null && token.topHolders > 25) return false;
+  if (token.insiderPct !== null && token.insiderPct > 10) return false;
+  if (token.bundlePct !== null && token.bundlePct > 20) return false;
   return true;
 }
 
