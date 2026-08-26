@@ -1,20 +1,20 @@
 /*
- * content.js — sidebar + scraper
+ * content.js — sidebar + scraper (no LLM needed)
  *
- * Injects a resizable sidebar into GMGN / DexScreener.
- * Scrapes tokens from the page, sends to background for AI eval,
- * streams results into the sidebar as a continuous feed.
+ * Scrapes tokens from GMGN / DexScreener and shows them
+ * in a sidebar as a live feed. No API key required.
+ *
+ * If an API key is set, it also sends tokens to background.js
+ * for AI meme quality scoring (optional upgrade).
  */
 
 const SITE = location.hostname.includes("gmgn") ? "gmgn" : "dexscreener";
-const evaluated = new Map();
-const pendingAddrs = new Set();
-let settings = { apiKey: "", enabled: true, scanInterval: 5 };
-let sidebarOpen = true;
+const found = new Map(); // address -> card data
+let scanCount = 0;
 
-// ── CSS (must be defined before buildSidebar uses it) ───────
+// ── CSS ─────────────────────────────────────────────────────
 
-const SIDEBAR_CSS = `
+const CSS = `
 #cs-sidebar {
   position: fixed; top: 0; right: 0; bottom: 0;
   width: 320px; z-index: 999999;
@@ -22,21 +22,16 @@ const SIDEBAR_CSS = `
   border-left: 1px solid #1e1e2e;
   display: flex; flex-direction: column;
   font-family: system-ui, -apple-system, sans-serif;
-  color: #d1d5db;
-  font-size: 13px;
+  color: #d1d5db; font-size: 13px;
 }
-
 #cs-drag {
   position: absolute; left: -4px; top: 0; bottom: 0; width: 8px;
   cursor: col-resize; z-index: 1000000;
 }
 #cs-drag:hover, #cs-drag:active { background: #8b5cf622; }
-
 #cs-head {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 10px 14px;
-  border-bottom: 1px solid #1e1e2e;
-  flex-shrink: 0;
+  padding: 10px 14px; border-bottom: 1px solid #1e1e2e; flex-shrink: 0;
 }
 #cs-title { font-weight: 800; font-size: 14px; }
 #cs-head-right { display: flex; align-items: center; gap: 8px; }
@@ -49,7 +44,6 @@ const SIDEBAR_CSS = `
   cursor: pointer; padding: 2px;
 }
 #cs-gear:hover, #cs-collapse:hover { color: #fff; }
-
 #cs-settings {
   padding: 10px 14px; border-bottom: 1px solid #1e1e2e;
   flex-shrink: 0; background: #0f0f18;
@@ -73,105 +67,75 @@ const SIDEBAR_CSS = `
 }
 #cs-save:hover { background: #7c3aed; }
 #cs-saved { color: #22c55e; font-size: 12px; font-weight: 600; }
-
 #cs-feed {
   flex: 1; overflow-y: auto; padding: 6px;
   scrollbar-width: thin; scrollbar-color: #333 transparent;
 }
-
-#cs-empty {
-  padding: 40px 20px; text-align: center; color: #555;
-  font-size: 13px; line-height: 1.6;
-}
-
 .cs-card {
   padding: 10px 12px; border-radius: 8px; margin-bottom: 4px;
-  border: 1px solid #1e1e2e;
-  transition: background .3s;
-  cursor: default;
+  border: 1px solid #1e1e2e; transition: background .3s; cursor: default;
 }
+.cs-card.cs-new { background: #1e293b; }
 .cs-card:hover { background: #1e1e2e; }
-
-.cs-card-top {
-  display: flex; align-items: center; gap: 6px;
-}
-.cs-card-emoji { font-size: 16px; }
-.cs-card-score {
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-weight: 800; font-size: 15px;
-}
-.cs-card-sym {
-  font-weight: 700; font-size: 13px; color: #fff;
-}
+.cs-card-top { display: flex; align-items: center; gap: 6px; }
+.cs-card-sym { font-weight: 700; font-size: 14px; color: #fff; }
 .cs-card-chain {
   font-size: 10px; font-weight: 600; color: #888;
   background: #1e1e2e; padding: 1px 5px; border-radius: 3px;
-  margin-left: auto;
 }
-
+.cs-card-score {
+  margin-left: auto;
+  font-family: 'JetBrains Mono', monospace; font-weight: 800; font-size: 13px;
+  padding: 2px 8px; border-radius: 5px; color: #fff;
+}
 .cs-card-name {
   font-size: 11px; color: #888; margin-top: 2px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-
 .cs-card-reason {
   font-size: 12px; color: #aaa; margin-top: 4px; line-height: 1.4;
 }
-
+.cs-card-twitter {
+  font-size: 11px; color: #1d9bf0; margin-top: 2px;
+}
+.cs-card-links { display: flex; gap: 6px; margin-top: 6px; }
 .cs-card-link {
-  display: inline-block; margin-top: 6px;
   font-size: 11px; color: #8b5cf6; text-decoration: none; font-weight: 600;
 }
 .cs-card-link:hover { color: #a78bfa; }
-
-#cs-tab {
-  position: fixed; right: 0; top: 50%; transform: translateY(-50%);
-  z-index: 999999;
-  width: 32px; height: 48px;
-  background: #0a0a0f; border: 1px solid #1e1e2e;
-  border-right: none; border-radius: 8px 0 0 8px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 18px; cursor: pointer;
-  color: #fff;
-}
-#cs-tab:hover { background: #1e1e2e; }
-
 #cs-status {
   display: flex; align-items: center; gap: 8px;
-  padding: 8px 14px;
-  border-top: 1px solid #1e1e2e;
-  flex-shrink: 0;
+  padding: 8px 14px; border-top: 1px solid #1e1e2e; flex-shrink: 0;
   font-size: 11px; color: #888;
 }
 #cs-dot {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: #555; flex-shrink: 0;
+  width: 8px; height: 8px; border-radius: 50%; background: #555; flex-shrink: 0;
 }
-#cs-dot.active {
-  background: #22c55e;
-  animation: cs-pulse 1.5s ease-in-out infinite;
-}
+#cs-dot.active { background: #22c55e; animation: cs-pulse 1.5s ease-in-out infinite; }
 #cs-dot.waiting { background: #eab308; }
-#cs-dot.error { background: #ef4444; }
-@keyframes cs-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+@keyframes cs-pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+#cs-status-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#cs-tab {
+  position: fixed; right: 0; top: 50%; transform: translateY(-50%);
+  z-index: 999999; width: 32px; height: 48px;
+  background: #0a0a0f; border: 1px solid #1e1e2e;
+  border-right: none; border-radius: 8px 0 0 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; cursor: pointer; color: #fff;
 }
-#cs-status-text {
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
+#cs-tab:hover { background: #1e1e2e; }
 `;
+
 
 // ── Build sidebar ───────────────────────────────────────────
 
 function buildSidebar() {
-  // Don't double-inject
   if (document.getElementById("cs-root")) return;
 
   const root = document.createElement("div");
   root.id = "cs-root";
   root.innerHTML = `
-    <style>${SIDEBAR_CSS}</style>
+    <style>${CSS}</style>
     <div id="cs-sidebar">
       <div id="cs-drag"></div>
       <div id="cs-head">
@@ -182,35 +146,25 @@ function buildSidebar() {
           <button id="cs-collapse">◀</button>
         </div>
       </div>
-
       <div id="cs-settings" style="display:none">
-        <label>API Key</label>
+        <label>API Key <span style="font-weight:400;text-transform:none;color:#555">(optional — enables AI scoring)</span></label>
         <input type="password" id="cs-key" placeholder="sk-ant-api03-..." spellcheck="false">
-        <label>Scan interval: <span id="cs-iv-label">5</span>s</label>
-        <input type="range" id="cs-iv" min="3" max="30" value="5">
+        <label>Scan interval: <span id="cs-iv-label">3</span>s</label>
+        <input type="range" id="cs-iv" min="2" max="30" value="3">
         <div id="cs-settings-actions">
           <button id="cs-save">Save</button>
           <span id="cs-saved"></span>
         </div>
       </div>
-
       <div id="cs-feed"></div>
-
-      <div id="cs-empty">
-        Scanning ${SITE}…<br>
-        <span style="font-size:11px;color:#555">Results appear as tokens are found and evaluated</span>
-      </div>
-
       <div id="cs-status">
-        <span id="cs-dot"></span>
+        <span id="cs-dot" class="waiting"></span>
         <span id="cs-status-text">Starting…</span>
       </div>
     </div>
     <button id="cs-tab" style="display:none">🪙</button>
   `;
   document.body.appendChild(root);
-
-  // ── Wire up events ──────────────────────────────────────
 
   // Settings toggle
   const settingsEl = document.getElementById("cs-settings");
@@ -222,16 +176,12 @@ function buildSidebar() {
   const sidebar = document.getElementById("cs-sidebar");
   const tab = document.getElementById("cs-tab");
   document.getElementById("cs-collapse").onclick = () => {
-    sidebar.style.display = "none";
-    tab.style.display = "flex";
+    sidebar.style.display = "none"; tab.style.display = "flex";
     document.body.style.marginRight = "0";
-    sidebarOpen = false;
   };
   tab.onclick = () => {
-    sidebar.style.display = "flex";
-    tab.style.display = "none";
+    sidebar.style.display = "flex"; tab.style.display = "none";
     document.body.style.marginRight = sidebar.style.width || "320px";
-    sidebarOpen = true;
   };
 
   // Interval slider
@@ -241,26 +191,18 @@ function buildSidebar() {
 
   // Save
   document.getElementById("cs-save").onclick = () => {
-    settings.apiKey = document.getElementById("cs-key").value.trim();
-    settings.scanInterval = parseInt(ivSlider.value) || 5;
-    chrome.storage.local.set(settings, () => {
-      const el = document.getElementById("cs-saved");
-      el.textContent = "✓ Saved";
-      setTimeout(() => { el.textContent = ""; }, 2000);
-
-      // Start scanning if key was just added
-      if (settings.apiKey) {
-        setStatus("Saved — scanning now…", "active");
-        settingsEl.style.display = "none";
-        setTimeout(() => scanPage(), 500);
-      }
+    const key = document.getElementById("cs-key").value.trim();
+    const interval = parseInt(ivSlider.value) || 3;
+    chrome.storage.local.set({ apiKey: key, scanInterval: interval }, () => {
+      document.getElementById("cs-saved").textContent = "✓ Saved";
+      setTimeout(() => { document.getElementById("cs-saved").textContent = ""; }, 2000);
+      setStatus(key ? "Saved — AI scoring enabled" : "Saved — running without AI", "active");
     });
   };
 
   // Drag to resize
-  const drag = document.getElementById("cs-drag");
   let dragging = false;
-  drag.onmousedown = (e) => { dragging = true; e.preventDefault(); };
+  document.getElementById("cs-drag").onmousedown = (e) => { dragging = true; e.preventDefault(); };
   document.addEventListener("mousemove", (e) => {
     if (!dragging) return;
     const w = Math.max(240, Math.min(600, window.innerWidth - e.clientX));
@@ -269,112 +211,126 @@ function buildSidebar() {
   });
   document.addEventListener("mouseup", () => { dragging = false; });
 
-  // Push page content to make room
+  // Push page content
   document.body.style.marginRight = "320px";
   document.body.style.transition = "margin-right .2s";
 }
 
 
-// ── Feed management ─────────────────────────────────────────
-
-function addToFeed(result) {
-  const feed = document.getElementById("cs-feed");
-  const empty = document.getElementById("cs-empty");
-  if (!feed) return;
-  if (empty) empty.style.display = "none";
-
-  // Don't show errors or very low scores cluttering the feed
-  if (result.score < 0) return;
-
-  // Build card
-  const card = document.createElement("div");
-  card.className = "cs-card";
-  card.dataset.score = result.score;
-
-  const emoji = { gem:"💎", interesting:"👀", meh:"😐", skip:"👎", scam:"🚩" }[result.verdict] || "❓";
-  const scoreColor = result.score >= 70 ? "#22c55e"
-    : result.score >= 50 ? "#eab308"
-    : result.score >= 30 ? "#f97316"
-    : "#ef4444";
-
-  const chain = result.chain || "?";
-  const chainShort = { solana:"SOL", ethereum:"ETH", base:"BASE", bsc:"BSC", tron:"TRON" }[chain] || chain.slice(0,4).toUpperCase();
-
-  // Build link to token page
-  let link = "#";
-  if (SITE === "gmgn") {
-    const cMap = { solana:"sol", ethereum:"eth", base:"base", bsc:"bsc" };
-    link = `https://gmgn.ai/${cMap[chain] || chain}/token/${result.address}`;
-  } else {
-    link = `https://dexscreener.com/${chain}/${result.address}`;
-  }
-
-  card.innerHTML = `
-    <div class="cs-card-top">
-      <span class="cs-card-emoji">${emoji}</span>
-      <span class="cs-card-score" style="color:${scoreColor}">${result.score}</span>
-      <span class="cs-card-sym">${result.symbol || "?"}</span>
-      <span class="cs-card-chain">${chainShort}</span>
-    </div>
-    <div class="cs-card-name">${esc(result.name || "")}</div>
-    <div class="cs-card-reason">${esc(result.reason || "")}</div>
-    <a class="cs-card-link" href="${link}" target="_blank">Open on ${SITE === "gmgn" ? "GMGN" : "DexScreener"} →</a>
-  `;
-
-  // Insert sorted — best scores at top
-  let inserted = false;
-  for (const existing of feed.children) {
-    if (parseInt(existing.dataset.score) < result.score) {
-      feed.insertBefore(card, existing);
-      inserted = true;
-      break;
-    }
-  }
-  if (!inserted) feed.appendChild(card);
-
-  // Update count
-  const countEl = document.getElementById("cs-count");
-  if (countEl) countEl.textContent = feed.children.length;
-
-  // Highlight briefly
-  card.style.background = "#1e293b";
-  setTimeout(() => { card.style.background = ""; }, 1500);
-}
-
-function esc(s) { const d = document.createElement("span"); d.textContent = s; return d.innerHTML; }
-
-
-// ── Status bar helper ───────────────────────────────────────
+// ── Status ──────────────────────────────────────────────────
 
 function setStatus(text, state = "active") {
   const dot = document.getElementById("cs-dot");
   const label = document.getElementById("cs-status-text");
-  if (dot) { dot.className = ""; dot.classList.add(state); }
+  if (dot) { dot.className = state; }
   if (label) label.textContent = text;
 }
+
+
+// ── Add token to feed ───────────────────────────────────────
+
+function addToFeed(token) {
+  const feed = document.getElementById("cs-feed");
+  if (!feed) return;
+
+  const chain = token.chain || "?";
+  const chainShort = { solana:"SOL", ethereum:"ETH", base:"BASE", bsc:"BSC", tron:"TRON", monad:"MON" }[chain] || chain.slice(0,4).toUpperCase();
+
+  let link;
+  if (SITE === "gmgn") {
+    const cMap = { solana:"sol", ethereum:"eth", base:"base", bsc:"bsc", tron:"tron", monad:"monad" };
+    link = `https://gmgn.ai/${cMap[chain] || chain}/token/${token.address}`;
+  } else {
+    link = `https://dexscreener.com/${chain}/${token.address}`;
+  }
+
+  const card = document.createElement("div");
+  card.className = "cs-card cs-new";
+  card.id = `cs-token-${token.address}`;
+
+  card.innerHTML = `
+    <div class="cs-card-top">
+      <span class="cs-card-sym">${esc(token.symbol)}</span>
+      <span class="cs-card-chain">${chainShort}</span>
+      ${token.twitterUrl ? `<span class="cs-card-twitter">𝕏</span>` : ''}
+      <span class="cs-card-score" id="cs-score-${token.address}" style="display:none"></span>
+    </div>
+    <div class="cs-card-name">${esc(token.name)}</div>
+    <div class="cs-card-reason" id="cs-reason-${token.address}"></div>
+    <div class="cs-card-links">
+      <a class="cs-card-link" href="${link}" target="_blank">Open →</a>
+      ${token.twitterUrl ? `<a class="cs-card-link" href="${esc(token.twitterUrl)}" target="_blank">Twitter →</a>` : ''}
+      <a class="cs-card-link" href="https://rugcheck.xyz/tokens/${token.address}" target="_blank" style="color:#eab308">RugCheck →</a>
+    </div>
+  `;
+
+  // Newest at top
+  feed.prepend(card);
+
+  // Remove highlight after a moment
+  setTimeout(() => { card.classList.remove("cs-new"); }, 2000);
+
+  // Update count
+  const countEl = document.getElementById("cs-count");
+  if (countEl) countEl.textContent = found.size;
+}
+
+function updateCardWithScore(address, result) {
+  const scoreEl = document.getElementById(`cs-score-${address}`);
+  const reasonEl = document.getElementById(`cs-reason-${address}`);
+  if (!scoreEl || !reasonEl) return;
+
+  const emoji = { gem:"💎", interesting:"👀", meh:"😐", skip:"👎", scam:"🚩" }[result.verdict] || "❓";
+  const bg = result.score >= 70 ? "#16a34a"
+    : result.score >= 50 ? "#ca8a04"
+    : result.score >= 30 ? "#ea580c"
+    : "#dc2626";
+
+  scoreEl.style.display = "inline-block";
+  scoreEl.style.background = bg;
+  scoreEl.textContent = `${emoji} ${result.score}`;
+  reasonEl.textContent = result.reason || "";
+}
+
+function esc(s) { const d = document.createElement("span"); d.textContent = s || ""; return d.innerHTML; }
 
 
 // ── Scraping ────────────────────────────────────────────────
 
 function scanPage() {
+  scanCount++;
   const tokens = SITE === "gmgn" ? scrapeGMGN() : scrapeDexScreener();
-  const newTokens = tokens.filter(t => !evaluated.has(t.address) && !pendingAddrs.has(t.address));
 
-  if (tokens.length === 0) {
-    setStatus(`No tokens found on page — scroll or navigate`, "waiting");
-  } else if (newTokens.length > 0) {
-    newTokens.forEach(t => pendingAddrs.add(t.address));
-    chrome.runtime.sendMessage({ type: "EVALUATE_TOKENS", tokens: newTokens });
-    setStatus(`Found ${newTokens.length} new · ${pendingAddrs.size} evaluating · ${evaluated.size} done`, "active");
+  let newCount = 0;
+  for (const t of tokens) {
+    if (found.has(t.address)) continue;
+    found.set(t.address, t);
+    addToFeed(t);
+    newCount++;
+  }
+
+  if (newCount > 0) {
+    setStatus(`+${newCount} new · ${found.size} total · scan #${scanCount}`, "active");
+
+    // If API key is set, send new tokens for AI scoring
+    chrome.storage.local.get({ apiKey: "" }, (data) => {
+      if (data.apiKey) {
+        const newTokens = tokens.filter(t => !t._scored);
+        if (newTokens.length) {
+          chrome.runtime.sendMessage({ type: "EVALUATE_TOKENS", tokens: newTokens });
+        }
+      }
+    });
+  } else if (tokens.length > 0) {
+    setStatus(`Watching · ${found.size} found · scan #${scanCount}`, "active");
   } else {
-    setStatus(`Watching · ${evaluated.size} evaluated · ${tokens.length} on page`, "active");
+    setStatus(`No tokens on page · scan #${scanCount} · scroll or navigate`, "waiting");
   }
 }
 
 function scrapeGMGN() {
   const tokens = [], seen = new Set();
 
-  // Token page links: /sol/token/ADDR, /bsc/token/ADDR, etc.
   document.querySelectorAll('a[href*="/token/"]').forEach(link => {
     const m = (link.getAttribute("href") || "").match(/\/(sol|bsc|eth|base|tron|monad)\/token\/([A-Za-z0-9]{20,})/);
     if (!m || seen.has(m[2])) return;
@@ -383,7 +339,7 @@ function scrapeGMGN() {
     const { name, symbol } = extractInfo(row || link);
     const twitterUrl = findTwitter(row || link);
     const chain = { sol:"solana", bsc:"bsc", eth:"ethereum", base:"base", tron:"tron", monad:"monad" }[m[1]] || m[1];
-    tokens.push({ chain, address: m[2], name, symbol, twitterUrl, element: link });
+    tokens.push({ chain, address: m[2], name, symbol, twitterUrl });
   });
 
   // Raw Solana addresses
@@ -393,7 +349,7 @@ function scrapeGMGN() {
       seen.add(m[1]);
       const row = findRow(el);
       const { name, symbol } = extractInfo(row || el);
-      tokens.push({ chain: "solana", address: m[1], name, symbol, element: el });
+      tokens.push({ chain: "solana", address: m[1], name, symbol });
     }
   });
 
@@ -408,7 +364,7 @@ function scrapeDexScreener() {
     seen.add(m[2]);
     const row = findRow(link);
     const { name, symbol } = extractInfo(row || link);
-    tokens.push({ chain: m[1], address: m[2], name, symbol, element: link });
+    tokens.push({ chain: m[1], address: m[2], name, symbol });
   });
   return tokens;
 }
@@ -437,52 +393,36 @@ function findTwitter(el) {
 }
 
 
-// ── Message handling ────────────────────────────────────────
+// ── Receive AI scores (optional) ────────────────────────────
 
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === "TOKEN_RESULT") {
-    pendingAddrs.delete(msg.address);
-    evaluated.set(msg.address, msg);
-    addToFeed(msg);
-
-    const pending = pendingAddrs.size;
-    if (pending > 0) {
-      setStatus(`Evaluating ${pending} more · ${evaluated.size} done`, "active");
-    } else {
-      setStatus(`Done · ${evaluated.size} evaluated · watching for new`, "active");
-    }
+  if (msg.type === "TOKEN_RESULT" && msg.score >= 0) {
+    updateCardWithScore(msg.address, msg);
   }
 });
 
 
 // ── Init ────────────────────────────────────────────────────
 
-async function init() {
+function init() {
   buildSidebar();
-  setStatus("Loading settings…", "waiting");
+  setStatus(`Ready — scanning ${SITE} in 2s`, "waiting");
 
-  // Load settings
-  chrome.storage.local.get({ apiKey: "", enabled: true, scanInterval: 5 }, (data) => {
-    settings = data;
+  // Load settings just for display
+  chrome.storage.local.get({ apiKey: "", scanInterval: 3 }, (data) => {
     document.getElementById("cs-key").value = data.apiKey || "";
-    document.getElementById("cs-iv").value = data.scanInterval || 5;
-    document.getElementById("cs-iv-label").textContent = data.scanInterval || 5;
+    document.getElementById("cs-iv").value = data.scanInterval || 3;
+    document.getElementById("cs-iv-label").textContent = data.scanInterval || 3;
 
-    if (!data.apiKey) {
-      document.getElementById("cs-settings").style.display = "block";
-      document.getElementById("cs-empty").innerHTML =
-        '⚙️ Paste your <a href="https://console.anthropic.com" target="_blank" style="color:#8b5cf6">Anthropic API key</a> above to start';
-      setStatus("Needs API key — open settings above", "error");
-      return;
-    }
+    const interval = (data.scanInterval || 3) * 1000;
 
-    // Start scanning
-    setStatus(`Ready — first scan in 2s on ${SITE}`, "waiting");
+    // Start scanning immediately — no API key needed
     setTimeout(() => {
       setStatus(`Scanning ${SITE}…`, "active");
       scanPage();
     }, 2000);
-    setInterval(() => scanPage(), (data.scanInterval || 5) * 1000);
+
+    setInterval(() => scanPage(), interval);
   });
 
   // Re-scan on SPA navigation
@@ -490,7 +430,7 @@ async function init() {
   new MutationObserver(() => {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
-      setTimeout(() => scanPage(), 2000);
+      setTimeout(() => scanPage(), 1500);
     }
   }).observe(document.body, { childList: true, subtree: true });
 }
