@@ -189,27 +189,45 @@ async function fetchPrice(chain, address) {
   const c = chainMap[chain];
   if (!c) return null;
 
+  // Try direct token lookup first
   try {
     const r = await fetch(`https://api.dexscreener.com/tokens/v1/${c}/${address}`);
-    if (!r.ok) return null;
-    const data = await r.json();
-    if (!Array.isArray(data) || !data[0]) return null;
+    if (r.ok) {
+      const data = await r.json();
+      if (Array.isArray(data) && data[0]?.priceUsd) {
+        return {
+          priceUsd: parseFloat(data[0].priceUsd) || 0,
+          marketCap: data[0].marketCap || data[0].fdv || 0,
+        };
+      }
+    }
+  } catch {}
 
-    const pair = data[0];
-    return {
-      priceUsd: parseFloat(pair.priceUsd) || 0,
-      marketCap: pair.marketCap || pair.fdv || 0,
-      volume24h: pair.volume?.h24 || 0,
-      liquidity: pair.liquidity?.usd || 0,
-    };
-  } catch {
-    return null;
-  }
+  // Fallback: search by address
+  try {
+    const r = await fetch(`https://api.dexscreener.com/latest/dex/search?q=${address}`);
+    if (r.ok) {
+      const data = await r.json();
+      if (data?.pairs?.length) {
+        const pair = data.pairs[0];
+        return {
+          priceUsd: parseFloat(pair.priceUsd) || 0,
+          marketCap: pair.marketCap || pair.fdv || 0,
+        };
+      }
+    }
+  } catch {}
+
+  return null;
 }
 
 async function trackToken(token) {
   const price = await fetchPrice(token.chain, token.address);
   const now = Date.now();
+
+  // Use DexScreener price if available, otherwise use scraped mcap from GMGN card
+  const initPrice = price?.priceUsd || 0;
+  const initMcap = price?.marketCap || token.mcap || 0;
 
   const entry = {
     address: token.address,
@@ -219,23 +237,26 @@ async function trackToken(token) {
     twitterHandle: token.twitterHandle || null,
     rugStatus: token.rugStatus || "unknown",
     trackedAt: now,
-    initialPrice: price?.priceUsd || 0,
-    initialMcap: price?.marketCap || 0,
-    // Peak tracking
-    peakPrice: price?.priceUsd || 0,
-    peakMcap: price?.marketCap || 0,
+    initialPrice: initPrice,
+    initialMcap: initMcap,
+    peakPrice: initPrice,
+    peakMcap: initMcap,
     peakTime: now,
-    // Current
-    currentPrice: price?.priceUsd || 0,
-    currentMcap: price?.marketCap || 0,
+    currentPrice: initPrice,
+    currentMcap: initMcap,
     lastChecked: now,
-    // Full history
-    snapshots: price ? [{ t: now, p: price.priceUsd, mc: price.marketCap }] : [],
+    snapshots: initPrice ? [{ t: now, p: initPrice, mc: initMcap }] : [],
   };
 
   chrome.storage.local.get({ tracked: [] }, (data) => {
     const tracked = data.tracked;
+    // Don't track duplicates — check address AND twitterHandle+symbol
     if (tracked.find(t => t.address === token.address)) return;
+    if (token.twitterHandle && token.symbol) {
+      const key = `${token.twitterHandle.toLowerCase()}_${token.symbol.toLowerCase()}`;
+      if (tracked.find(t => t.twitterHandle && t.symbol &&
+          `${t.twitterHandle.toLowerCase()}_${t.symbol.toLowerCase()}` === key)) return;
+    }
     tracked.push(entry);
     if (tracked.length > 200) tracked.shift();
     chrome.storage.local.set({ tracked });

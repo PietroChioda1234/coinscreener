@@ -540,7 +540,20 @@ function scrapeGMGN() {
     const pumpLink = card.querySelector('a[href*="pump.fun/coin/"]');
     if (pumpLink) pumpUrl = pumpLink.getAttribute("href");
 
-    tokens.push({ chain, address, name, symbol, twitter, twitterHandle, telegram, website, pumpUrl });
+    // 7. Scrape market cap and volume directly from card text
+    //    GMGN shows "MC $4.4K" and "V $2.6K" in the card
+    let mcap = 0, volume = 0;
+    const cardText = card.textContent || "";
+    const mcMatch = cardText.match(/MC\s*\$([0-9.]+)\s*(K|M|B)?/i);
+    if (mcMatch) {
+      mcap = parseFloat(mcMatch[1]) * (mcMatch[2] === 'B' ? 1e9 : mcMatch[2] === 'M' ? 1e6 : mcMatch[2] === 'K' ? 1e3 : 1);
+    }
+    const volMatch = cardText.match(/\bV\s*\$([0-9.]+)\s*(K|M|B)?/i);
+    if (volMatch) {
+      volume = parseFloat(volMatch[1]) * (volMatch[2] === 'B' ? 1e9 : volMatch[2] === 'M' ? 1e6 : volMatch[2] === 'K' ? 1e3 : 1);
+    }
+
+    tokens.push({ chain, address, name, symbol, twitter, twitterHandle, telegram, website, pumpUrl, mcap, volume });
   }
 
   // Fallback: if no cards found with data-testid, try sequential link scanning
@@ -665,28 +678,54 @@ function renderTracked(tracked) {
     const init = t.initialPrice || 0;
     const peak = t.peakPrice || 0;
     const cur = t.currentPrice || 0;
-    const hasData = init > 0 && cur > 0;
+    const initMcap = t.initialMcap || 0;
+    const curMcap = t.currentMcap || 0;
+    const peakMcap = t.peakMcap || 0;
+    const hasPrice = init > 0 && cur > 0;
+    const hasMcap = initMcap > 0;
+
+    // If we have nothing at all, show minimal card
+    if (!hasPrice && !hasMcap) {
+      html += `
+        <div class="cs-tracked-card" style="opacity:0.5">
+          <div class="cs-tracked-top">
+            <span class="cs-tracked-sym">${esc(t.symbol)}</span>
+            <span style="font-size:11px;color:#888">${esc(t.twitterHandle ? '@' + t.twitterHandle : '')}</span>
+            <span class="cs-tracked-time">${age} ago</span>
+          </div>
+          <div style="font-size:11px;color:#555;margin-top:4px">Waiting for price data…</div>
+        </div>
+      `;
+      continue;
+    }
 
     // Calculate percentages
-    const pnlNow = hasData ? ((cur - init) / init) * 100 : null;
+    const pnlNow = hasPrice ? ((cur - init) / init) * 100 : null;
     const pnlPeak = init > 0 && peak > 0 ? ((peak - init) / init) * 100 : null;
     const drawdown = peak > 0 && cur > 0 ? ((cur - peak) / peak) * 100 : null;
+    const mcapChange = initMcap > 0 && curMcap > 0 ? ((curMcap - initMcap) / initMcap) * 100 : null;
     const timeToPeak = t.peakTime && t.trackedAt ? formatAge(t.peakTime - t.trackedAt) : "—";
+
+    // Use price PnL if available, otherwise mcap change
+    const mainPnl = pnlNow !== null ? pnlNow : mcapChange;
+    const mainPeakPnl = pnlPeak !== null ? pnlPeak : (initMcap > 0 && peakMcap > 0 ? ((peakMcap - initMcap) / initMcap) * 100 : null);
 
     // Trajectory label
     let trajectory = "", trajColor = "#555";
-    if (hasData) {
+    if (mainPnl !== null) {
       totalWithData++;
-      if (pnlNow >= 5) { trajectory = "📈 Up"; trajColor = "#4ade80"; wins++; }
-      else if (pnlNow <= -5 && pnlPeak > 20) { trajectory = "🎢 Pumped & dumped"; trajColor = "#f97316"; peaked++; }
-      else if (pnlNow <= -5) { trajectory = "📉 Down"; trajColor = "#f87171"; }
-      else if (pnlPeak > 20 && drawdown < -10) { trajectory = "⚡ Peaked, pulling back"; trajColor = "#eab308"; peaked++; }
+      if (mainPnl >= 5) { trajectory = "📈 Up"; trajColor = "#4ade80"; wins++; }
+      else if (mainPnl <= -5 && mainPeakPnl > 20) { trajectory = "🎢 Pumped & dumped"; trajColor = "#f97316"; peaked++; }
+      else if (mainPnl <= -5) { trajectory = "📉 Down"; trajColor = "#f87171"; }
+      else if (mainPeakPnl > 20 && drawdown < -10) { trajectory = "⚡ Peaked, pulling back"; trajColor = "#eab308"; peaked++; }
       else { trajectory = "➡️ Flat"; trajColor = "#888"; }
     }
 
-    const pnlColor = pnlNow === null ? "#555" : pnlNow >= 0 ? "#4ade80" : "#f87171";
-    const peakColor = pnlPeak === null ? "#555" : pnlPeak >= 0 ? "#4ade80" : "#f87171";
+    const pnlColor = mainPnl === null ? "#555" : mainPnl >= 0 ? "#4ade80" : "#f87171";
+    const peakColor = mainPeakPnl === null ? "#555" : mainPeakPnl >= 0 ? "#4ade80" : "#f87171";
     const snapCount = t.snapshots?.length || 0;
+
+    const fmtPnl = (v) => v === null ? "" : ` (${v >= 0 ? "+" : ""}${v.toFixed(0)}%)`;
 
     html += `
       <div class="cs-tracked-card">
@@ -697,16 +736,14 @@ function renderTracked(tracked) {
         </div>
         <div style="font-size:12px;color:${trajColor};font-weight:600;margin:4px 0">${trajectory}</div>
         <div class="cs-tracked-prices">
-          <span>Entry: ${fmtPrice(init)}</span>
-          <span>MCap: ${fmtUsd(t.initialMcap)}</span>
+          <span>Entry: ${hasPrice ? fmtPrice(init) : ''} ${hasMcap ? 'MC ' + fmtUsd(initMcap) : ''}</span>
         </div>
         <div class="cs-tracked-prices">
-          <span style="color:${peakColor}">Peak: ${fmtPrice(peak)} ${pnlPeak !== null ? '(' + (pnlPeak >= 0 ? '+' : '') + pnlPeak.toFixed(0) + '%)' : ''}</span>
-          <span style="color:#888">at ${timeToPeak}</span>
+          <span style="color:${peakColor}">Peak: ${hasPrice ? fmtPrice(peak) : ''} ${peakMcap ? 'MC ' + fmtUsd(peakMcap) : ''}${fmtPnl(mainPeakPnl)}</span>
+          <span style="color:#555">at ${timeToPeak}</span>
         </div>
         <div class="cs-tracked-prices">
-          <span style="color:${pnlColor}">Now: ${fmtPrice(cur)} ${pnlNow !== null ? '(' + (pnlNow >= 0 ? '+' : '') + pnlNow.toFixed(0) + '%)' : ''}</span>
-          <span style="color:#888">MCap: ${fmtUsd(t.currentMcap)}</span>
+          <span style="color:${pnlColor}">Now: ${hasPrice ? fmtPrice(cur) : ''} ${curMcap ? 'MC ' + fmtUsd(curMcap) : ''}${fmtPnl(mainPnl)}</span>
         </div>
         <div style="font-size:10px;color:#444;margin-top:4px">${snapCount} snapshots · last checked ${t.lastChecked ? formatAge(Date.now() - t.lastChecked) + ' ago' : '—'}</div>
       </div>
