@@ -221,11 +221,20 @@ async function fetchPrice(chain, address) {
   return null;
 }
 
+const trackingPending = new Set();
+
 async function trackToken(token) {
+  // Prevent race condition — multiple calls before first save completes
+  const dupeKey = token.twitterHandle && token.symbol
+    ? `${token.twitterHandle.toLowerCase()}_${token.symbol.toLowerCase()}`
+    : token.address;
+
+  if (trackingPending.has(dupeKey)) return;
+  trackingPending.add(dupeKey);
+
   const price = await fetchPrice(token.chain, token.address);
   const now = Date.now();
 
-  // Use DexScreener price if available, otherwise use scraped mcap from GMGN card
   const initPrice = price?.priceUsd || 0;
   const initMcap = price?.marketCap || token.mcap || 0;
 
@@ -242,8 +251,8 @@ async function trackToken(token) {
     peakPrice: initPrice,
     peakMcap: initMcap,
     peakTime: now,
-    maxDrawdown: 0,       // worst % drop from any peak
-    maxDrawdownTime: null, // when it happened
+    maxDrawdown: 0,
+    maxDrawdownTime: null,
     currentPrice: initPrice,
     currentMcap: initMcap,
     lastChecked: now,
@@ -252,16 +261,25 @@ async function trackToken(token) {
 
   chrome.storage.local.get({ tracked: [] }, (data) => {
     const tracked = data.tracked;
-    // Don't track duplicates — check address AND twitterHandle+symbol
-    if (tracked.find(t => t.address === token.address)) return;
+    // Check dupes by address
+    if (tracked.find(t => t.address === token.address)) {
+      trackingPending.delete(dupeKey);
+      return;
+    }
+    // Check dupes by handle+symbol
     if (token.twitterHandle && token.symbol) {
       const key = `${token.twitterHandle.toLowerCase()}_${token.symbol.toLowerCase()}`;
       if (tracked.find(t => t.twitterHandle && t.symbol &&
-          `${t.twitterHandle.toLowerCase()}_${t.symbol.toLowerCase()}` === key)) return;
+          `${t.twitterHandle.toLowerCase()}_${t.symbol.toLowerCase()}` === key)) {
+        trackingPending.delete(dupeKey);
+        return;
+      }
     }
     tracked.push(entry);
     if (tracked.length > 200) tracked.shift();
-    chrome.storage.local.set({ tracked });
+    chrome.storage.local.set({ tracked }, () => {
+      trackingPending.delete(dupeKey);
+    });
   });
 }
 
