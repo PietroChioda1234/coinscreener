@@ -402,66 +402,94 @@ function scanPage() {
 }
 
 function scrapeGMGN() {
-  const tokens = [], seen = new Set();
+  // Get ALL links on the page in DOM order
+  const allLinks = [...document.querySelectorAll('a[href]')];
+  const tokens = [];
+  let current = null;
 
-  document.querySelectorAll('a[href*="pump.fun/coin/"]').forEach(link => {
-    const m = (link.getAttribute("href") || "").match(/pump\.fun\/coin\/([A-Za-z0-9]{20,})/);
-    if (!m || seen.has(m[1])) return;
-    seen.add(m[1]);
-    const row = findRow(link);
-    const { name, symbol } = extractInfo(row || link);
-    const socials = findSocials(link);
-    tokens.push({ chain: "solana", address: m[1], name, symbol, ...socials, pumpUrl: link.getAttribute("href") });
-  });
+  for (const link of allLinks) {
+    const href = link.getAttribute("href") || "";
 
-  document.querySelectorAll('a[href*="/token/"]').forEach(link => {
-    const m = (link.getAttribute("href") || "").match(/\/(sol|bsc|eth|base|tron|monad)\/token\/([A-Za-z0-9]{20,})/);
-    if (!m || seen.has(m[2])) return;
-    seen.add(m[2]);
-    const row = findRow(link);
-    const { name, symbol } = extractInfo(row || link);
-    const socials = findSocials(link);
-    const chain = { sol:"solana", bsc:"bsc", eth:"ethereum", base:"base" }[m[1]] || m[1];
-    tokens.push({ chain, address: m[2], name, symbol, ...socials });
-  });
+    // Is this a token link (pump.fun)?
+    const pumpMatch = href.match(/pump\.fun\/coin\/([A-Za-z0-9]{20,})/);
+    if (pumpMatch) {
+      // Save previous token if exists
+      if (current && !tokens.find(t => t.address === current.address)) {
+        tokens.push(current);
+      }
+      // Start new token
+      const addr = pumpMatch[1];
+      const { name, symbol } = extractInfo(link.parentElement?.parentElement || link);
+      current = { chain: "solana", address: addr, name, symbol, pumpUrl: href, twitter: null, telegram: null, website: null };
+      continue;
+    }
 
-  document.querySelectorAll('a[href*="raydium.io"], a[href*="letsbonk.fun"]').forEach(link => {
-    const m = (link.getAttribute("href") || "").match(/([1-9A-HJ-NP-Za-km-z]{32,44})/);
-    if (!m || seen.has(m[1])) return;
-    seen.add(m[1]);
-    const row = findRow(link);
-    const { name, symbol } = extractInfo(row || link);
-    const socials = findSocials(link);
-    tokens.push({ chain: "solana", address: m[1], name, symbol, ...socials });
-  });
+    // Is this an internal GMGN token link?
+    const gmgnMatch = href.match(/\/(sol|bsc|eth|base|tron|monad)\/token\/([A-Za-z0-9]{20,})/);
+    if (gmgnMatch) {
+      if (current && !tokens.find(t => t.address === current.address)) {
+        tokens.push(current);
+      }
+      const chain = { sol:"solana", bsc:"bsc", eth:"ethereum", base:"base" }[gmgnMatch[1]] || gmgnMatch[1];
+      const { name, symbol } = extractInfo(link.parentElement?.parentElement || link);
+      current = { chain, address: gmgnMatch[2], name, symbol, twitter: null, telegram: null, website: null };
+      continue;
+    }
+
+    // Not a token link — if we have a current token, check if this is a social link
+    if (!current) continue;
+
+    if (!current.twitter && (href.includes("x.com/") || href.includes("twitter.com/")) && !href.includes("/status/")) {
+      current.twitter = href;
+    }
+    if (!current.telegram && (href.includes("t.me/") || href.includes("telegram.me/"))) {
+      current.telegram = href;
+    }
+    if (!current.website && href.startsWith("http") &&
+        !href.includes("pump.fun") && !href.includes("gmgn.ai") &&
+        !href.includes("x.com") && !href.includes("twitter.com") &&
+        !href.includes("t.me") && !href.includes("telegram.") &&
+        !href.includes("lens.google") && !href.includes("dexscreener") &&
+        !href.includes("raydium") && !href.includes("letsbonk") &&
+        !href.includes("nitter") && !href.includes("cnn.com")) {
+      current.website = href;
+    }
+  }
+
+  // Don't forget the last token
+  if (current && !tokens.find(t => t.address === current.address)) {
+    tokens.push(current);
+  }
 
   return tokens;
 }
 
 function scrapeDexScreener() {
-  const tokens = [], seen = new Set();
-  document.querySelectorAll('a[href]').forEach(link => {
-    const m = (link.getAttribute("href") || "").match(/^\/(solana|ethereum|base|bsc|arbitrum|polygon|optimism|sui)\/([A-Za-z0-9]{20,})/);
-    if (!m || seen.has(m[2])) return;
-    seen.add(m[2]);
-    const row = findRow(link);
-    const { name, symbol } = extractInfo(row || link);
-    const socials = findSocials(link);
-    tokens.push({ chain: m[1], address: m[2], name, symbol, ...socials });
-  });
-  return tokens;
-}
+  // DexScreener: same sequential approach
+  const allLinks = [...document.querySelectorAll('a[href]')];
+  const tokens = [];
+  let current = null;
 
-function findRow(el) {
-  let node = el;
-  for (let i = 0; i < 6 && node; i++) {
-    node = node.parentElement;
-    if (!node) break;
-    const cl = node.className || "";
-    if (cl.match(/row|item|card|pair|token|list/i)) return node;
-    if (node.querySelectorAll('a[href]').length >= 3) return node;
+  for (const link of allLinks) {
+    const href = link.getAttribute("href") || "";
+    const m = href.match(/^\/(solana|ethereum|base|bsc|arbitrum|polygon|optimism|sui)\/([A-Za-z0-9]{20,})/);
+    if (m) {
+      if (current && !tokens.find(t => t.address === current.address)) tokens.push(current);
+      const { name, symbol } = extractInfo(link.parentElement?.parentElement || link);
+      current = { chain: m[1], address: m[2], name, symbol, twitter: null, telegram: null, website: null };
+      continue;
+    }
+    if (!current) continue;
+    if (!current.twitter && (href.includes("x.com/") || href.includes("twitter.com/")) && !href.includes("/status/")) current.twitter = href;
+    if (!current.telegram && (href.includes("t.me/") || href.includes("telegram.me/"))) current.telegram = href;
+    if (!current.website && href.startsWith("http") &&
+        !href.includes("dexscreener") && !href.includes("x.com") && !href.includes("twitter.com") &&
+        !href.includes("t.me") && !href.includes("telegram.") && !href.includes("lens.google")) {
+      current.website = href;
+    }
   }
-  return el.parentElement?.parentElement?.parentElement || el.parentElement;
+  if (current && !tokens.find(t => t.address === current.address)) tokens.push(current);
+  return tokens;
 }
 
 function extractInfo(el) {
@@ -470,29 +498,6 @@ function extractInfo(el) {
   const parts = text.split(/[\n\t/|·]+/).map(s => s.trim()).filter(s => s.length >= 2 && s.length <= 30);
   const name = parts.find(p => !/^[A-Z0-9$]+$/.test(p) && !/^\d/.test(p)) || parts[0] || "?";
   return { name, symbol: symMatch ? symMatch[1] : "?" };
-}
-
-function findSocials(el) {
-  const socials = { twitter: null, telegram: null, website: null };
-  const container = findRow(el) || el;
-
-  for (const a of container.querySelectorAll('a[href]')) {
-    const h = a.getAttribute("href") || "";
-    if (!socials.twitter && (h.includes("x.com/") || h.includes("twitter.com/")) && !h.match(/\/status\//)) {
-      socials.twitter = h;
-    }
-    if (!socials.telegram && (h.includes("t.me/") || h.includes("telegram.me/"))) {
-      socials.telegram = h;
-    }
-    if (!socials.website && h.startsWith("http") &&
-        !h.includes("pump.fun") && !h.includes("gmgn.ai") && !h.includes("x.com") &&
-        !h.includes("twitter.com") && !h.includes("t.me") && !h.includes("telegram.") &&
-        !h.includes("lens.google") && !h.includes("dexscreener") &&
-        !h.includes("raydium") && !h.includes("letsbonk") && !h.includes("nitter")) {
-      socials.website = h;
-    }
-  }
-  return socials;
 }
 
 
